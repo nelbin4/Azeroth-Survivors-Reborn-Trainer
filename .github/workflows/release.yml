@@ -1,0 +1,33 @@
+name: Release Reborn Trainer
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+      - run: pip install -r requirements.txt pyinstaller
+      - name: Verify tag matches trainer version
+        shell: python
+        run: |
+          import os
+          from trainer import VERSION
+          assert os.environ['GITHUB_REF_NAME'] == f'v{VERSION}', 'Tag and trainer version differ'
+      - run: python -m unittest discover -s . -p "test_*.py"
+      - run: python build_exe.py
+      - name: Publish Reborn release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $archive = Get-ChildItem -LiteralPath release -Filter 'AzerothSurvivorRebornTrainer-*.zip' | Select-Object -First 1
+          gh release create "$env:GITHUB_REF_NAME" "release/Azeroth Survivor Reborn Trainer.exe" $archive.FullName "release/SHA256SUMS.txt" --title "Azeroth Survivor Reborn Trainer $env:GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md
