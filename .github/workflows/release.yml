@@ -3,14 +3,23 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build and publish
+        required: true
+        type: string
 permissions:
   contents: write
 jobs:
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -20,8 +29,10 @@ jobs:
         shell: python
         run: |
           import os
+          import sys
+          sys.path.insert(0, os.getcwd())
           from trainer import VERSION
-          assert os.environ['GITHUB_REF_NAME'] == f'v{VERSION}', 'Tag and trainer version differ'
+          assert os.environ['RELEASE_TAG'] == f'v{VERSION}', 'Tag and trainer version differ'
       - run: python -m unittest discover -s . -p "test_*.py"
       - run: python build_exe.py
       - name: Publish Reborn release
@@ -30,4 +41,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $archive = Get-ChildItem -LiteralPath release -Filter 'AzerothSurvivorRebornTrainer-*.zip' | Select-Object -First 1
-          gh release create "$env:GITHUB_REF_NAME" "release/Azeroth Survivor Reborn Trainer.exe" $archive.FullName "release/SHA256SUMS.txt" --title "Azeroth Survivor Reborn Trainer $env:GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md
+          gh release create "$env:RELEASE_TAG" "release/Azeroth Survivor Reborn Trainer.exe" $archive.FullName "release/SHA256SUMS.txt" --title "Azeroth Survivor Reborn Trainer $env:RELEASE_TAG" --notes-file RELEASE_NOTES.md
