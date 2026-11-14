@@ -101,6 +101,7 @@ def install_command(staged, target, pid):
     # Copy the old executable before replacement; retry while the one-file
     # bootloader exits. A failed replacement leaves the old installation intact.
     script = f"""$ErrorActionPreference='Stop'
+$env:PYINSTALLER_RESET_ENVIRONMENT='1'
 $target={quote(target)}
 $staged={quote(staged)}
 $backup={quote(target.with_suffix('.previous.exe'))}
@@ -132,4 +133,13 @@ def launch_install(staged):
     if not getattr(sys, 'frozen', False):
         raise RuntimeError('Self-update is available in the standalone executable. Use the release page for source installs.')
     return subprocess.Popen(install_command(staged, sys.executable, os.getpid()),
-                            creationflags=0x08000000)
+                            creationflags=0x08000000, env=restart_environment())
+
+
+def restart_environment():
+    # A one-file restart must extract its own runtime. The old bootloader removes
+    # its _MEI directory on exit; inherited worker metadata would reuse that path.
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.upper().startswith('_PYI_') and key.upper() != '_MEIPASS2'}
+    environment['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
+    return environment

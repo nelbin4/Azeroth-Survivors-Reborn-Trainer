@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.6.3
+# Azeroth Survivor Reborn Trainer 0.6.4
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e` and `a02914e85f9b` executable layouts.
@@ -70,6 +70,12 @@ If an update cannot start, close the trainer and copy that backup over the main
 executable. The trainer folder must be writable. Network failures leave the
 installed version usable; GitHub API rate limits can delay checks. No GitHub
 login or credentials are required.
+
+The restart helper resets PyInstaller's runtime environment so the updated
+executable extracts a fresh Python runtime. If updating from v0.6.0 through
+v0.6.3 shows a missing Python DLL error immediately after installation, dismiss
+the error and open the trainer executable normally once. The downloaded binary
+is intact; v0.6.4 fixes subsequent update restarts.
 
 ## Update compatibility
 
