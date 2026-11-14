@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.4.0
+# Azeroth Survivor Reborn Trainer 0.4.1
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 build and the newer `d76345ce7a4e` executable layout.
@@ -21,7 +21,7 @@ within the two verified layout families can attach without adding their file has
 Ambiguous patterns or unknown structural families block writes. Arbitrary future
 versions cannot be guaranteed compatible.
 
-Discovery is cached for an unchanged executable; loaded instructions and hero
+Discovery uses a bounded cache with file identity and a five-second freshness window; loaded instructions and hero
 identity are rechecked before writes. Duplicate stack references to one hero are
 grouped by allocation and identity. Distinct hero allocations remain blocked.
 Hold polling skips unchanged values and uses no injected code.
@@ -63,7 +63,7 @@ Find hero again after a new run. Leave the trainer open to keep Hold active.
 ## Native options
 
 God mode, auto-pick cards, all-zone access, showcase pickups, rift/bar/clock/vault
-options, run clock speed (0.1â€“10), and next-run starting minute (0â€“60).
+options, run clock speed (0.1Ã¢â‚¬â€œ10), and next-run starting minute (0Ã¢â‚¬â€œ60).
 Some options are read only on menu entry or a new run. The native unlock-all
 flag alone has not been verified to grant progression; use the save upgrade tab.
 The game can mark these configurations as modified/test runs.

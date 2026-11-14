@@ -2,6 +2,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from compatibility import resolve, _resolve
 
@@ -78,7 +79,7 @@ class CompatibilityTests(unittest.TestCase):
                 self.resolve_blob(blob)
 
     def test_file_version_cache_invalidates_after_update(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, patch('compatibility.time.monotonic', return_value=1) as clock:
             path = Path(temp) / 'game.exe'
             path.write_bytes(fixture())
             first = resolve(path)
@@ -88,4 +89,5 @@ class CompatibilityTests(unittest.TestCase):
             blob = fixture()
             blob[0x2300] = 19
             path.write_bytes(blob)
+            clock.return_value = 6
             self.assertNotEqual(resolve(path).digest, first.digest)

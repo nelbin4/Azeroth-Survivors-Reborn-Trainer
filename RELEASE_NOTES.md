@@ -4,7 +4,7 @@ Compatibility and detection update for Azeroth Survivors: Reborn.
 - Discovers live configuration addresses and player layout fields from unique code patterns.
 - Compatible updates within verified layout families no longer need a hash allowlist entry.
 - Groups duplicate stack references by hero allocation and identity; distinct heroes stay blocked.
-- Caches layout discovery and skips unchanged Hold writes.
+- Caches layout discovery with file identity and bounded freshness; skips unchanged Hold writes.
 - Preserves live instruction, process, solo-player and readback checks.
 - 28 automated tests; live damage and God-mode write/restore checks passed on the newer build.
 

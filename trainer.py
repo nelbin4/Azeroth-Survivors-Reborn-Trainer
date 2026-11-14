@@ -21,7 +21,7 @@ from player import Player, STATS
 from compatibility import resolve
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.4.0'
+VERSION = '0.4.1'
 PROCESS_NAME = 'AzerothSurvivorsGame.exe'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'

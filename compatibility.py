@@ -5,6 +5,7 @@ from pathlib import Path
 import hashlib
 import re
 import struct
+import time
 from functools import lru_cache
 
 
@@ -24,15 +25,18 @@ class Layout:
 def resolve(path):
     path = Path(path).resolve()
     state = path.stat()
-    return _resolve(str(path), state.st_size, state.st_mtime_ns, state.st_ctime_ns)
+    # File identity catches atomic updates; bounded freshness also catches an
+    # in-place rewrite whose filesystem timestamps were retained/coarsened.
+    return _resolve(str(path), state.st_size, state.st_mtime_ns, state.st_ctime_ns,
+                    state.st_ino, int(time.monotonic() // 5))
 
 
 @lru_cache(maxsize=4)
-def _resolve(path, size, modified, created):
+def _resolve(path, size, modified, created, file_id, generation):
     blob = Path(path).read_bytes()
     digest = hashlib.sha256(blob).hexdigest()
     state = Path(path).stat()
-    if (state.st_size, state.st_mtime_ns, state.st_ctime_ns) != (size, modified, created):
+    if (state.st_size, state.st_mtime_ns, state.st_ctime_ns, state.st_ino) != (size, modified, created, file_id):
         raise RuntimeError('Game executable changed during layout discovery. Retry.')
     if digest == 'ab7b6332a6c47e4c29188e44932939e560b274cf06e0f212cb3ada119a3a3d35':
         guards = {0x7139363: '0f958208020000', 0x71417F8: '0fb68208020000',
