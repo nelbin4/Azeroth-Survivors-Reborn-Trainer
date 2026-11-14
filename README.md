@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.6.1
+# Azeroth Survivor Reborn Trainer 0.6.2
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 build and the newer `d76345ce7a4e` executable layout.

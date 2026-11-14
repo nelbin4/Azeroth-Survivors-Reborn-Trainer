@@ -21,7 +21,7 @@ class GameProcessTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.exe = Path(self.temp.name) / PROCESS_NAME
+        self.exe = Path(self.temp.name).resolve() / PROCESS_NAME
         self.exe.write_bytes(b'test fixture; never executed')
         self.first = process(123, self.exe)
         self.second = process(456, self.exe, 200)

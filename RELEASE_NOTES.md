@@ -1,4 +1,4 @@
-Game launch and exact process controls for Azeroth Survivor Reborn Trainer v0.6.1.
+Game launch and exact process controls for Azeroth Survivor Reborn Trainer v0.6.2.
 
 - Larger, prominent Find Hero button that automatically applies Max all stats, God mode and XP assistance after solo-hero validation.
 - Replaces the primary Locate game action with Run Azeroth Survivors Reborn.
