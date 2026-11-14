@@ -15,13 +15,15 @@ import struct
 import sys
 import threading
 import queue
+import time
+from runtime import RetrySchedule, same_session
 
 import psutil
 from player import Player, STATS
 from compatibility import resolve
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.4.1'
+VERSION = '0.5.0'
 PROCESS_NAME = 'AzerothSurvivorsGame.exe'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
@@ -287,22 +289,34 @@ def run_gui(max_player=False):
 
     root = tk.Tk()
     root.title(APP_NAME)
-    root.geometry('700x1000')
-    root.minsize(700, 950)
+    root.geometry('1120x880')
+    root.minsize(1040, 700)
     root.configure(bg='#14202c')
     style = ttk.Style(root)
     style.theme_use('clam')
+    root.option_add('*Font', ('Segoe UI', 10))
     style.configure('TFrame', background='#14202c')
     style.configure('TLabel', background='#14202c', foreground='#e5e9ef')
     style.configure('TCheckbutton', background='#14202c', foreground='#e5e9ef')
     style.map('TCheckbutton', background=[('active', '#203448')])
+    style.configure('TButton', padding=(12, 7), background='#24364b', foreground='#e5e9ef', borderwidth=0)
+    style.map('TButton', background=[('active', '#35516c')], foreground=[('disabled', '#728399')])
+    style.configure('Accent.TButton', background='#56d6b0', foreground='#10251f', font=('Segoe UI', 10, 'bold'))
+    style.map('Accent.TButton', background=[('active', '#7ce5c6'), ('disabled', '#263c3d')])
+    style.configure('TEntry', fieldbackground='#0c1826', foreground='#edf5ff', insertcolor='#edf5ff', padding=5)
+    style.configure('TLabelframe', background='#14202c', bordercolor='#34475d', relief='solid')
+    style.configure('TLabelframe.Label', background='#14202c', foreground='#76dfc1', font=('Segoe UI', 10, 'bold'))
+    style.configure('TNotebook', background='#14202c', borderwidth=0)
+    style.configure('TNotebook.Tab', background='#24364b', foreground='#bdcbdc', padding=(20, 10))
+    style.map('TNotebook.Tab', background=[('selected', '#36536a')], foreground=[('selected', '#ffffff')],
+              padding=[('selected', (20, 10)), ('!selected', (20, 10))])
     body = ttk.Frame(root, padding=22)
     body.pack(fill='both', expand=True)
     ttk.Label(body, text='AZEROTH SURVIVOR REBORN', font=('Segoe UI', 18, 'bold')).pack(anchor='w')
     ttk.Label(body, text=f'TRAINER  v{VERSION}   ·   Solo / host use', foreground='#a9b8c8').pack(anchor='w', pady=(3, 14))
     status = tk.StringVar(value='Searching for the running game…')
     detail = tk.StringVar(value='')
-    ttk.Label(body, textvariable=status, font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+    ttk.Label(body, textvariable=status, font=('Segoe UI', 11, 'bold'), foreground='#76dfc1', wraplength=1030).pack(anchor='w')
     ttk.Label(body, textvariable=detail, wraplength=600, foreground='#a9b8c8').pack(anchor='w', pady=(4, 12))
     tabs = ttk.Notebook(body)
     tabs.pack(fill='both', expand=True)
@@ -316,6 +330,10 @@ def run_gui(max_player=False):
     player_content = player_canvas.create_window((0, 0), window=player_tab, anchor='nw')
     player_tab.bind('<Configure>', lambda event: player_canvas.configure(scrollregion=player_canvas.bbox('all')))
     player_canvas.bind('<Configure>', lambda event: player_canvas.itemconfigure(player_content, width=event.width))
+    def wheel(event):
+        if tabs.select() == str(player_shell):
+            player_canvas.yview_scroll(-int(event.delta / 120), 'units')
+    root.bind('<MouseWheel>', wheel)
     native_tab = ttk.Frame(tabs, padding=10)
     progression_tab = ttk.Frame(tabs, padding=12)
     tabs.add(player_shell, text='Player stats')
@@ -332,6 +350,10 @@ def run_gui(max_player=False):
     player_holds = {}
     player_current = {}
     pending = queue.Queue()
+    hero_pending = queue.Queue()
+    hero_searching = False
+    hero_generation = 0
+    retry = RetrySchedule()
     connecting = False
     closing = False
     try:
@@ -393,22 +415,45 @@ def run_gui(max_player=False):
     hero_status = tk.StringVar(value='Start a solo run and click Find hero.')
     hero_row = ttk.Frame(player_tab)
     hero_row.pack(fill='x', pady=(0, 10))
-    ttk.Label(hero_row, textvariable=hero_status, wraplength=470).pack(side='left')
+    ttk.Label(hero_row, textvariable=hero_status, wraplength=760, font=('Segoe UI', 11)).pack(side='left')
+    hero_actions = ttk.Frame(player_tab)
+    hero_actions.pack(fill='x', pady=(0, 14))
 
     def find_hero():
-        nonlocal player
-        if not trainer:
+        nonlocal player, hero_searching, hero_generation
+        if not trainer or hero_searching:
             return
         try:
             if player:
                 player.stop()
-            player = Player(trainer)
-            snapshot = player.connect()
-            show_hero(snapshot)
-            status.set('Solo hero verified. Player controls are ready.')
-            if max_player:
-                maximize_player()
+            player = None
+            for held in player_holds.values():
+                held.set(False)
+            xp_assist.set(False)
+            hero_searching = True
+            hero_generation += 1
+            generation = hero_generation
+            identity = trainer.identity()
+            path = trainer.path
+            hero_status.set('Finding your solo hero… You can keep using this window.')
+            def search():
+                reader = None
+                try:
+                    reader = Trainer(path, writable=False)
+                    if not same_session(identity, reader.identity()):
+                        raise RuntimeError('Game restarted during discovery. Find hero again.')
+                    candidate = Player(reader)
+                    candidate.connect()
+                    result = dict(candidate.lease)
+                except Exception as exc:
+                    result = exc
+                finally:
+                    if reader:
+                        reader.close()
+                hero_pending.put((generation, identity, result))
+            threading.Thread(target=search, daemon=True).start()
         except Exception as exc:
+            hero_searching = False
             hero_status.set(str(exc))
             error(exc)
 
@@ -417,7 +462,7 @@ def run_gui(max_player=False):
     widgets.append(find_button)
 
     def show_hero(snapshot):
-        hero_status.set(f"{snapshot['name']} · Level {snapshot['level']} · HP {snapshot['hp']}/{snapshot['maximum']}\nGold {snapshot['gold']} · XP {snapshot['xp']}/{snapshot['next_xp']}")
+        hero_status.set(f"{snapshot['name']}  ·  Level {snapshot['level']}  ·  Health {snapshot['hp']:,} / {snapshot['maximum']:,}\nGold {snapshot['gold']:,}  ·  XP {snapshot['xp']:,} / {snapshot['next_xp']:,}  ·  Holds {len(player.frozen)} / {len(STATS)}")
         for key, value in snapshot['values'].items():
             player_current[key].set(str(value))
 
@@ -438,13 +483,29 @@ def run_gui(max_player=False):
             player.frozen.pop(key, None)
             error(exc)
 
+    cards = ttk.Frame(player_tab)
+    cards.pack(fill='x')
+    cards.columnconfigure((0, 1), weight=1, uniform='cards')
+    sections = {}
+    for i, title in enumerate(('OFFENSE', 'DEFENSE', 'UTILITY', 'RUN RESOURCES')):
+        card = ttk.LabelFrame(cards, text=title, padding=12)
+        card.grid(row=i // 2, column=i % 2, sticky='nsew', padx=5, pady=5)
+        sections[title] = card
+        headings = ttk.Frame(card)
+        headings.pack(fill='x', pady=(0, 6))
+        ttk.Label(headings, text='STAT', width=23, foreground='#879bb3').pack(side='left')
+        ttk.Label(headings, text='LIVE', width=9, anchor='e', foreground='#879bb3').pack(side='left', padx=3)
+        ttk.Label(headings, text='TARGET', width=7, foreground='#879bb3').pack(side='left', padx=4)
+    groups = {'damage':'OFFENSE', 'cooldown':'OFFENSE', 'crit':'OFFENSE', 'crit_damage':'OFFENSE', 'area':'OFFENSE', 'targets':'OFFENSE',
+              'armor':'DEFENSE', 'regen':'DEFENSE', 'max_health':'DEFENSE', 'run_gold':'RUN RESOURCES', 'rerolls':'RUN RESOURCES'}
+    labels = {'crit':'Crit bonus %', 'crit_damage':'Crit damage bonus %', 'speed':'Movement speed %', 'regen':'Regeneration', 'pickup':'Pickup range %', 'gold_bonus':'Gold find %'}
     for key, stat in STATS.items():
-        row = ttk.Frame(player_tab)
+        row = ttk.Frame(sections[groups.get(key, 'UTILITY')])
         row.pack(fill='x', pady=3)
-        ttk.Label(row, text=stat.label, width=33).pack(side='left')
+        ttk.Label(row, text=labels.get(key, stat.label), width=23).pack(side='left')
         current = tk.StringVar(value='—')
         player_current[key] = current
-        ttk.Label(row, textvariable=current, width=7, anchor='e').pack(side='left', padx=5)
+        ttk.Label(row, textvariable=current, width=9, anchor='e', foreground='#76dfc1').pack(side='left', padx=3)
         target = tk.StringVar(value=str(stat.default))
         player_targets[key] = target
         entry = ttk.Entry(row, textvariable=target, width=7)
@@ -453,7 +514,7 @@ def run_gui(max_player=False):
         player_holds[key] = hold
         check = ttk.Checkbutton(row, text='Hold', variable=hold, command=lambda k=key: apply_stat(k, True))
         check.pack(side='right')
-        button = ttk.Button(row, text='Set', width=5, command=lambda k=key: apply_stat(k))
+        button = ttk.Button(row, text='Set', width=3, command=lambda k=key: apply_stat(k))
         button.pack(side='right', padx=3)
         player_widgets.extend([entry, check, button])
 
@@ -502,9 +563,20 @@ def run_gui(max_player=False):
                 player_holds[key].set(key in player.frozen)
             error(exc)
 
-    max_button = ttk.Button(player_tab, text='Max all stats + God mode', command=maximize_player)
-    max_button.pack(anchor='w', pady=5)
+    max_button = ttk.Button(hero_actions, text='Max all stats + God mode', command=maximize_player, style='Accent.TButton')
+    max_button.pack(side='left', padx=(0, 8))
     player_widgets.append(max_button)
+    def pause_holds():
+        if player:
+            player.frozen.clear()
+            player.xp_assist = False
+            for held in player_holds.values():
+                held.set(False)
+            xp_assist.set(False)
+            status.set('Holds paused. Current values remain; use Restore changes to restore eligible stats.')
+    pause_button = ttk.Button(hero_actions, text='Pause holds', command=pause_holds)
+    pause_button.pack(side='left')
+    player_widgets.append(pause_button)
     xp_assist = tk.BooleanVar(value=False)
     def toggle_xp_assist():
         if player:
@@ -564,6 +636,9 @@ def run_gui(max_player=False):
     actions.pack(fill='x')
 
     def restore():
+        nonlocal hero_generation, hero_searching
+        hero_generation += 1
+        hero_searching = False
         if trainer:
             try:
                 if player:
@@ -582,9 +657,12 @@ def run_gui(max_player=False):
     widgets.append(restore_button)
 
     def locate():
-        nonlocal trainer, player
+        nonlocal trainer, player, hero_generation, hero_searching
         path = filedialog.askopenfilename(title='Locate AzerothSurvivorsGame.exe', filetypes=[('Reborn game', PROCESS_NAME)])
         if path:
+            hero_generation += 1
+            hero_searching = False
+            retry.reset()
             if trainer:
                 try:
                     if player:
@@ -606,25 +684,59 @@ def run_gui(max_player=False):
 
     def connect_worker(path):
         try:
-            pending.put(Trainer(path))
+            result = Trainer(path)
+            if closing:
+                result.close()
+            else:
+                pending.put(result)
         except Exception as exc:
             pending.put(exc)
 
     def poll():
-        nonlocal trainer, connecting, player
+        nonlocal trainer, connecting, player, hero_searching, hero_generation
         try:
             result = pending.get_nowait()
             connecting = False
             if isinstance(result, Exception):
+                retry.failed(time.monotonic())
                 status.set(str(result))
             else:
+                chosen = saved.get('game_exe')
+                if chosen and os.path.normcase(str(Path(chosen).resolve())) != os.path.normcase(result.path):
+                    result.close()
+                    retry.reset()
+                    return root.after(200, poll)
                 trainer = result
+                retry.reset()
                 saved['game_exe'] = trainer.path
                 atomic_json(SETTINGS, saved)
                 status.set(f'Connected · PID {trainer.process.pid} · layout validated · {trainer.build[:12]}')
                 detail.set(trainer.path)
                 refresh_values()
                 root.after(100, find_hero)
+        except queue.Empty:
+            pass
+        try:
+            generation, identity, result = hero_pending.get_nowait()
+            if generation == hero_generation:
+                hero_searching = False
+                if trainer and same_session(identity, trainer.identity()):
+                    if isinstance(result, Exception):
+                        hero_status.set(str(result))
+                        status.set('Native options ready. Start a solo run, then Find hero.')
+                    else:
+                        try:
+                            candidate = Player(trainer)
+                            candidate.lease = result
+                            snapshot = candidate.snapshot()
+                            player = candidate
+                            show_hero(snapshot)
+                            status.set('Solo hero verified. Live controls are ready.')
+                            if max_player:
+                                maximize_player()
+                        except Exception as exc:
+                            hero_status.set(str(exc))
+                            error(exc)
         except queue.Empty:
             pass
         if trainer:
@@ -634,9 +746,20 @@ def run_gui(max_player=False):
                 trainer.close()
                 trainer = None
                 player = None
+                hero_generation += 1
+                hero_searching = False
+                for held in player_holds.values():
+                    held.set(False)
+                xp_assist.set(False)
+                hero_status.set('Disconnected. Start the game to reconnect.')
+                for value in player_current.values():
+                    value.set('—')
+                retry.failed(time.monotonic())
                 status.set(str(exc))
         for widget in widgets:
             widget.configure(state='normal' if trainer else 'disabled')
+        find_button.configure(state='normal' if trainer and not hero_searching else 'disabled')
+        find_button.configure(text='Finding…' if hero_searching else 'Find hero')
         if player and player.lease:
             try:
                 show_hero(player.tick())
@@ -648,17 +771,21 @@ def run_gui(max_player=False):
                 for held in player_holds.values():
                     held.set(False)
                 hero_status.set(str(exc))
+                for value in player_current.values():
+                    value.set('—')
                 status.set('Player controls stopped. Find hero again after starting a solo run.')
         for widget in player_widgets:
             widget.configure(state='normal' if player and player.lease else 'disabled')
-        if not trainer and not connecting:
+        if not trainer and not connecting and retry.ready(time.monotonic()):
             connecting = True
             threading.Thread(target=connect_worker, args=(saved.get('game_exe'),), daemon=True).start()
         if not closing:
             root.after(500, poll)
 
     def close():
-        nonlocal closing
+        nonlocal closing, hero_generation
+        closing = True
+        hero_generation += 1
         if trainer:
             try:
                 if player:
@@ -667,7 +794,10 @@ def run_gui(max_player=False):
             except (RuntimeError, OSError, psutil.Error) as exc:
                 logging.warning('Restore on close: %s', exc)
             trainer.close()
-        closing = True
+        while not pending.empty():
+            result = pending.get_nowait()
+            if isinstance(result, Trainer):
+                result.close()
         root.destroy()
 
     root.protocol('WM_DELETE_WINDOW', close)

@@ -1,15 +1,13 @@
-Compatibility and detection update for Azeroth Survivors: Reborn.
+Frontend and backend improvements for Azeroth Survivor Reborn Trainer.
 
-- Supports the newer d76345ce7a4e build alongside the original 0.6.3 executable.
-- Discovers live configuration addresses and player layout fields from unique code patterns.
-- Compatible updates within verified layout families no longer need a hash allowlist entry.
-- Groups duplicate stack references by hero allocation and identity; distinct heroes stay blocked.
-- Caches layout discovery with file identity and bounded freshness; skips unchanged Hold writes.
-- Preserves live instruction, process, solo-player and readback checks.
-- 28 automated tests; live damage and God-mode write/restore checks passed on the newer build.
+- Wider, resizable interface with Offense, Defense, Utility and Run Resources cards.
+- Improved dark theme, aligned live/target columns, visible Max and Pause holds actions, and mouse-wheel scrolling.
+- Background hero discovery with an isolated read-only process connection.
+- Rejects stale discovery results after restart, game selection, Restore or shutdown.
+- Bounded reconnection delays and clear disconnected/paused status.
+- Clears stale readings and hold indicators after a lost hero or process.
+- 30 automated tests, including retry scheduling and stale session rejection.
 
-Unknown structural changes remain blocked. Permanent save upgrades still require
-the separately verified original save format/build; this release does not enable
-cloud overwrites or unverified newer save editing.
-
-Official game: https://azreborn.com/
+Retains v0.4.1 pattern-based layout discovery and all existing player, native and
+save-backup controls. Future structural changes and unverified save formats remain
+blocked. Official game: https://azreborn.com/

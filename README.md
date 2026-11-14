@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.4.1
+# Azeroth Survivor Reborn Trainer 0.5.0
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 build and the newer `d76345ce7a4e` executable layout.
@@ -12,6 +12,19 @@ Download the portable zip from [Reborn Trainer Releases](https://github.com/nelb
 extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. Start a solo run,
 then click **Find hero** and **Max all stats + God mode**. Keep the trainer open.
 Player controls require a verified solo character.
+
+## Interface and recovery
+
+Controls are grouped into Offense, Defense, Utility and Run Resources cards with
+live values and editable targets. Max and Pause holds stay above the stat cards.
+Mouse-wheel scrolling works in the player tab; the window can be resized.
+Pause holds stops repeated stat/XP writes and leaves current values in place.
+Restore changes restores eligible values and cancels pending hero searches.
+
+Hero discovery runs on a background read-only connection. The interface remains
+responsive while searching, and results from stale process identities or cancelled
+searches are discarded. Reconnecting uses bounded retry delays instead of
+repeated rapid attach attempts. A disconnect clears stale readings and hold flags.
 
 ## Update compatibility
 
@@ -63,7 +76,7 @@ Find hero again after a new run. Leave the trainer open to keep Hold active.
 ## Native options
 
 God mode, auto-pick cards, all-zone access, showcase pickups, rift/bar/clock/vault
-options, run clock speed (0.1Ã¢â‚¬â€œ10), and next-run starting minute (0Ã¢â‚¬â€œ60).
+options, run clock speed (0.1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“10), and next-run starting minute (0ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“60).
 Some options are read only on menu entry or a new run. The native unlock-all
 flag alone has not been verified to grant progression; use the save upgrade tab.
 The game can mark these configurations as modified/test runs.
