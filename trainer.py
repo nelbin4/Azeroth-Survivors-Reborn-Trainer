@@ -17,6 +17,7 @@ import threading
 import queue
 import time
 from runtime import RetrySchedule, same_session
+from game_process import GameLauncher, GameSession, PROCESS_NAME, same_path
 import updater
 import webbrowser
 
@@ -25,8 +26,7 @@ from player import Player, STATS
 from compatibility import resolve
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.6.0'
-PROCESS_NAME = 'AzerothSurvivorsGame.exe'
+VERSION = '0.6.1'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 JOURNAL = ROOT / 'reborn-recovery.json'
@@ -131,14 +131,16 @@ def atomic_json(path, data):
 
 
 class Trainer:
-    def __init__(self, path=None, writable=True, journal=JOURNAL):
+    def __init__(self, path=None, writable=True, journal=JOURNAL, session=None):
         self.path = path
         self.memory = None
         self.process = None
         self.journal = journal
         self.changes = {}
         self.lock = None
-        games = find_games(path)
+        if session and path and not same_path(session.path, path):
+            raise RuntimeError('Selected process does not match the game path.')
+        games = [session.process()] if session else find_games(path)
         if not games:
             raise RuntimeError('Waiting for Azeroth Survivors: Reborn.')
         if len(games) != 1:
@@ -285,7 +287,7 @@ class InstanceLock:
             self.close()
 
 
-def run_gui(max_player=False):
+def run_gui():
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
 
@@ -305,6 +307,10 @@ def run_gui(max_player=False):
     style.map('TButton', background=[('active', '#35516c')], foreground=[('disabled', '#728399')])
     style.configure('Accent.TButton', background='#56d6b0', foreground='#10251f', font=('Segoe UI', 10, 'bold'))
     style.map('Accent.TButton', background=[('active', '#7ce5c6'), ('disabled', '#263c3d')])
+    style.configure('FindHero.TButton', background='#56d6b0', foreground='#10251f',
+                    font=('Segoe UI', 16, 'bold'), padding=(24, 12))
+    style.map('FindHero.TButton', background=[('active', '#7ce5c6'), ('disabled', '#263c3d')],
+              foreground=[('disabled', '#728399')])
     style.configure('TEntry', fieldbackground='#0c1826', foreground='#edf5ff', insertcolor='#edf5ff', padding=5)
     style.configure('TLabelframe', background='#14202c', bordercolor='#34475d', relief='solid')
     style.configure('TLabelframe.Label', background='#14202c', foreground='#76dfc1', font=('Segoe UI', 10, 'bold'))
@@ -318,7 +324,7 @@ def run_gui(max_player=False):
     header.pack(fill='x', pady=(0, 8))
     ttk.Label(header, text='AZEROTH SURVIVORS REBORN', foreground='#e3be69', font=('Segoe UI', 20, 'bold')).pack(side='left')
     ttk.Label(header, text=f'v{VERSION}  ·  Solo controls', foreground='#a9b8c8').pack(side='left', padx=16)
-    status = tk.StringVar(value='Searching for the running game…')
+    status = tk.StringVar(value='Waiting for Azeroth Survivors: Reborn.')
     detail = tk.StringVar(value='')
     ttk.Label(body, textvariable=status, font=('Segoe UI', 10), foreground='#76dfc1', wraplength=1030).pack(anchor='w', pady=(0, 6))
     # Full executable path remains in settings; avoid a second empty status row.
@@ -359,6 +365,9 @@ def run_gui(max_player=False):
     hero_pending = queue.Queue()
     hero_searching = False
     hero_generation = 0
+    connection_generation = 0
+    launcher = GameLauncher()
+    next_process_scan = 0
     retry = RetrySchedule()
     connecting = False
     closing = False
@@ -466,11 +475,12 @@ def run_gui(max_player=False):
             generation = hero_generation
             identity = trainer.identity()
             path = trainer.path
+            session = GameSession(trainer.process.pid, trainer.created, trainer.path)
             hero_status.set('Finding your solo hero… You can keep using this window.')
             def search():
                 reader = None
                 try:
-                    reader = Trainer(path, writable=False)
+                    reader = Trainer(path, writable=False, session=session)
                     if not same_session(identity, reader.identity()):
                         raise RuntimeError('Game restarted during discovery. Find hero again.')
                     candidate = Player(reader)
@@ -488,7 +498,7 @@ def run_gui(max_player=False):
             hero_status.set(str(exc))
             error(exc)
 
-    find_button = ttk.Button(header, text='Find hero', command=find_hero)
+    find_button = ttk.Button(header, text='Find Hero', width=18, style='FindHero.TButton', command=find_hero)
     find_button.pack(side='right')
     widgets.append(find_button)
 
@@ -718,28 +728,105 @@ def run_gui(max_player=False):
     restore_button.pack(side='left', padx=6)
     widgets.append(restore_button)
 
-    def locate():
-        nonlocal trainer, player, hero_generation, hero_searching
-        path = filedialog.askopenfilename(title='Locate AzerothSurvivorsGame.exe', filetypes=[('Reborn game', PROCESS_NAME)])
-        if path:
-            hero_generation += 1
-            hero_searching = False
-            retry.reset()
-            if trainer:
-                try:
-                    if player:
-                        player.stop()
-                    trainer.restore()
-                except Exception as exc:
-                    error(exc)
-                    return
+    def disconnect_game():
+        nonlocal trainer, player, hero_generation, hero_searching, connection_generation, connecting
+        connection_generation += 1
+        connecting = False
+        hero_generation += 1
+        hero_searching = False
+        if trainer:
+            try:
+                if player:
+                    player.stop()
+                trainer.restore()
+            except (RuntimeError, OSError, psutil.Error) as exc:
+                logging.warning('Restore before disconnect: %s', exc)
+            finally:
                 trainer.close()
-                trainer = None
-                player = None
+        trainer = None
+        player = None
+        for held in player_holds.values():
+            held.set(False)
+        for value in player_current.values():
+            value.set('—')
+        xp_assist.set(False)
+        hold_all.set(False)
+        hero_status.set('No solo hero connected. Start a run and use Find hero.')
+        retry.reset()
+
+    def choose_executable():
+        path = filedialog.askopenfilename(title='Choose Azeroth Survivors Reborn executable',
+                                         initialfile=PROCESS_NAME, filetypes=[('Reborn game', PROCESS_NAME)])
+        if not path:
+            return None
+        exe = Path(path).resolve()
+        if not exe.is_file() or exe.name.casefold() != PROCESS_NAME.casefold():
+            raise ValueError(f'Choose the installed {PROCESS_NAME} executable.')
+        return str(exe)
+
+    def locate():
+        nonlocal next_process_scan
+        try:
+            path = choose_executable()
+            if path:
+                disconnect_game()
+                launcher.session = None
+                saved['game_exe'] = path
+                atomic_json(SETTINGS, saved)
+                next_process_scan = 0
+                status.set('Game executable saved. Use Run Azeroth Survivors Reborn to launch it.')
+        except Exception as exc:
+            error(exc)
+
+    def run_game():
+        nonlocal next_process_scan
+        try:
+            launcher.refresh(saved.get('game_exe'))
+            if launcher.running:
+                raise RuntimeError('Reborn is already running. Use the detected process below.')
+            path = saved.get('game_exe')
+            if not path or not Path(path).is_file():
+                path = choose_executable()
+                if not path:
+                    return
             saved['game_exe'] = path
             atomic_json(SETTINGS, saved)
+            disconnect_game()
+            session = launcher.launch(path)
+            next_process_scan = 0
+            run_button.configure(state='disabled')
+            status.set(f'Launched Reborn · PID {session.pid} · waiting for game initialization…')
+        except Exception as exc:
+            error(exc)
 
-    ttk.Button(actions, text='Locate game', command=locate).pack(side='left', padx=8)
+    def stop_game():
+        nonlocal next_process_scan
+        try:
+            session = launcher.session
+            if not session:
+                raise RuntimeError('No single Reborn process is selected. Choose its executable to disambiguate.')
+            session.process()
+            if not messagebox.askyesno('Stop Azeroth Survivors Reborn',
+                                      f'Stop Reborn PID {session.pid}? Unsaved run progress may be lost.\n\n{session.path}'):
+                return
+            # The dialog may stay open while the game exits or restarts: revalidate before acting.
+            session.process()
+            disconnect_game()
+            session.stop()
+            next_process_scan = 0
+            stop_button.configure(state='disabled')
+            status.set(f'Stop requested for Reborn PID {session.pid}.')
+        except Exception as exc:
+            next_process_scan = 0
+            error(exc)
+
+    run_button = ttk.Button(actions, text='Run Azeroth Survivors Reborn', command=run_game, style='Accent.TButton')
+    run_button.pack(side='left', padx=(0, 8))
+    stop_button = ttk.Button(actions, text='Stop game', command=stop_game, state='disabled')
+    stop_button.pack(side='left', padx=(0, 8))
+    ttk.Button(actions, text='Game executable…', command=locate).pack(side='left')
+    process_status = tk.StringVar(value='Checking game processes…')
+    ttk.Label(actions, textvariable=process_status, foreground='#a9b8c8', wraplength=230).pack(side='left', padx=12)
     ttk.Button(actions, text='Open folder', command=lambda: os.startfile(ROOT)).pack(side='right')
     ttk.Label(body, text='Restore does not undo one-time actions or permanent save upgrades.',
               foreground='#a9b8c8', wraplength=600).pack(anchor='w', pady=(12, 0))
@@ -812,18 +899,39 @@ def run_gui(max_player=False):
             root.after(6 * 60 * 60 * 1000, scheduled_update_check)
     root.after(1500, scheduled_update_check)
 
-    def connect_worker(path):
+    def connect_worker(session, generation):
         try:
-            result = Trainer(path)
+            result = Trainer(session.path, session=session)
             if closing:
                 result.close()
             else:
-                pending.put(result)
+                pending.put((generation, result))
         except Exception as exc:
-            pending.put(exc)
+            pending.put((generation, exc))
 
     def poll():
-        nonlocal trainer, connecting, player, hero_searching, hero_generation, update_busy, latest_release
+        nonlocal trainer, connecting, player, hero_searching, hero_generation, update_busy, latest_release, next_process_scan
+        now = time.monotonic()
+        if now >= next_process_scan:
+            try:
+                launcher.refresh(saved.get('game_exe'))
+            except (OSError, psutil.Error) as exc:
+                launcher.session = None
+                launcher.sessions = []
+                launcher.unreadable = True
+                logging.warning('Process detection failed: %s', exc)
+            next_process_scan = now + 2
+        run_button.configure(state='disabled' if launcher.running else 'normal')
+        stop_button.configure(state='normal' if launcher.session else 'disabled')
+        if launcher.session:
+            extra = f' · {len(launcher.sessions)} instances' if len(launcher.sessions) > 1 else ''
+            process_status.set(f'Running · PID {launcher.session.pid}{extra}')
+        elif launcher.unreadable:
+            process_status.set('Running process inaccessible')
+        elif launcher.sessions:
+            process_status.set('Multiple games · choose executable')
+        else:
+            process_status.set('Game is not running')
         try:
             kind, result = update_results.get_nowait()
             update_busy = False
@@ -844,25 +952,30 @@ def run_gui(max_player=False):
         except queue.Empty:
             pass
         try:
-            result = pending.get_nowait()
-            connecting = False
-            if isinstance(result, Exception):
+            generation, result = pending.get_nowait()
+            if generation != connection_generation:
+                if isinstance(result, Trainer):
+                    result.close()
+            elif isinstance(result, Exception):
+                connecting = False
                 retry.failed(time.monotonic())
                 status.set(str(result))
             else:
-                chosen = saved.get('game_exe')
-                if chosen and os.path.normcase(str(Path(chosen).resolve())) != os.path.normcase(result.path):
+                connecting = False
+                selected = launcher.session
+                if (not selected or selected.pid != result.process.pid or selected.created != result.created
+                        or not same_path(selected.path, result.path)):
                     result.close()
                     retry.reset()
-                    return root.after(200, poll)
-                trainer = result
-                retry.reset()
-                saved['game_exe'] = trainer.path
-                atomic_json(SETTINGS, saved)
-                status.set(f'Connected · PID {trainer.process.pid} · layout validated · {trainer.build[:12]}')
-                detail.set(trainer.path)
-                refresh_values()
-                root.after(100, find_hero)
+                else:
+                    trainer = result
+                    retry.reset()
+                    saved['game_exe'] = trainer.path
+                    atomic_json(SETTINGS, saved)
+                    status.set(f'Connected · PID {trainer.process.pid} · layout validated · {trainer.build[:12]}')
+                    detail.set(trainer.path)
+                    refresh_values()
+                    root.after(100, find_hero)
         except queue.Empty:
             pass
         try:
@@ -881,8 +994,7 @@ def run_gui(max_player=False):
                             player = candidate
                             show_hero(snapshot)
                             status.set('Solo hero verified. Live controls are ready.')
-                            if max_player:
-                                maximize_player()
+                            maximize_player()
                         except Exception as exc:
                             hero_status.set(str(exc))
                             error(exc)
@@ -909,7 +1021,7 @@ def run_gui(max_player=False):
         for widget in widgets:
             widget.configure(state='normal' if trainer else 'disabled')
         find_button.configure(state='normal' if trainer and not hero_searching else 'disabled')
-        find_button.configure(text='Finding…' if hero_searching else 'Find hero')
+        find_button.configure(text='Finding Hero…' if hero_searching else 'Find Hero')
         if player and player.lease:
             try:
                 show_hero(player.tick())
@@ -927,9 +1039,9 @@ def run_gui(max_player=False):
                 status.set('Player controls stopped. Find hero again after starting a solo run.')
         for widget in player_widgets:
             widget.configure(state='normal' if player and player.lease else 'disabled')
-        if not trainer and not connecting and retry.ready(time.monotonic()):
+        if not trainer and not connecting and launcher.session and retry.ready(time.monotonic()):
             connecting = True
-            threading.Thread(target=connect_worker, args=(saved.get('game_exe'),), daemon=True).start()
+            threading.Thread(target=connect_worker, args=(launcher.session, connection_generation), daemon=True).start()
         if not closing:
             root.after(500, poll)
 
@@ -946,7 +1058,7 @@ def run_gui(max_player=False):
                 logging.warning('Restore on close: %s', exc)
             trainer.close()
         while not pending.empty():
-            result = pending.get_nowait()
+            _, result = pending.get_nowait()
             if isinstance(result, Trainer):
                 result.close()
         root.destroy()
@@ -962,12 +1074,12 @@ def main():
     parser.add_argument('--game', help='Full path to AzerothSurvivorsGame.exe')
     parser.add_argument('--feature', choices=FEATURES)
     parser.add_argument('--value', type=float)
-    parser.add_argument('--max-player', action='store_true', help='Find a solo hero and enable Max all stats in the GUI.')
+    parser.add_argument('--max-player', action='store_true', help='Compatibility flag: Find Hero now always enables Max all stats.')
     args = parser.parse_args()
     logging.basicConfig(filename=ROOT / 'reborn-trainer.log', level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     if args.command == 'gui':
-        run_gui(max_player=args.max_player)
+        run_gui()
         return
     trainer = Trainer(args.game, writable=args.command != 'status')
     try:

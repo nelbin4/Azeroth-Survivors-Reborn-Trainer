@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.6.0
+# Azeroth Survivor Reborn Trainer 0.6.1
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 build and the newer `d76345ce7a4e` executable layout.
@@ -9,9 +9,31 @@ Derived from the process validation and recovery approach of
 [Azeroth Survivors Trainer](https://github.com/nelbin4/Azeroth-Survivors-Trainer).
 
 Download the portable zip from [Reborn Trainer Releases](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases),
-extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. Start a solo run,
-then click **Find hero** and **Max all stats**. Keep the trainer open.
+extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. If the game is
+closed, click **Run Azeroth Survivors Reborn**. Start a solo run in the game,
+then click **Find Hero**. After verifying your solo hero, the trainer automatically
+applies **Max all stats**, God mode and XP assistance. Keep the trainer open.
 Player controls require a verified solo character.
+
+## Launch and process controls
+
+**Run Azeroth Survivors Reborn** launches the saved game executable from its own
+folder and pins the returned PID, process creation time and executable path.
+On first use, select the installed `AzerothSurvivorsGame.exe`. The path is saved;
+**Game executable…** changes it later without launching the game.
+
+Run is disabled whenever a Reborn process is detected, including unsupported
+builds. The process row shows the selected PID. Existing single instances are
+automatically detected. With several instances, the saved executable path can
+select a unique instance; ambiguous instances are never attached or stopped.
+An inaccessible process also blocks a duplicate launch.
+
+**Stop game** terminates only the selected, revalidated process after a confirmation
+showing its PID and path. Unsaved run progress can be lost. The trainer first
+stops holds and restores eligible changes when attached. Stop remains available
+when memory-layout detection fails; no game compatibility checks are bypassed.
+Run becomes available again after the process exits. Closing the trainer alone
+leaves the game running.
 
 ## Interface and recovery
 
@@ -94,7 +116,9 @@ One-time controls heal, set run gold (up to 99,999,999), or place XP one point
 below the next level. All 15 fields, healing, God mode and XP assistance were read back in live solo
 play; the visual and gameplay effects of each remaining field need broader testing.
 Max also enables XP assistance: XP stays one pickup below the next level, letting native pickups perform level-ups and card rewards. Time and kills are run counters.
-Find hero again after a new run. Leave the trainer open to keep Hold active.
+Click Find Hero again after a new run to verify and max the new character.
+Pause stops repeated writes; they resume only when you enable holds, use Max all
+stats, or find a hero again. Leave the trainer open to keep Hold active.
 
 ## Native options
 

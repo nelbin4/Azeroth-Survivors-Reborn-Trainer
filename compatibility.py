@@ -112,4 +112,4 @@ def _resolve(path, size, modified, created, file_id, generation):
         unique(re.escape(b'\x8b\x88' + struct.pack('<I', stats + 8)))
         return Layout(digest, config, signatures, stride, pointer - 8, index, name, stats, rerolls)
     except (ValueError, StopIteration, struct.error, IndexError) as exc:
-        raise RuntimeError(f'Unsupported Reborn build {digest[:12]}: {exc}. Controls are blocked.') from exc
+        raise RuntimeError(f'Unsupported Reborn build {digest[:12]}: {exc}. Memory controls are blocked.') from exc
