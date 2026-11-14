@@ -1,7 +1,7 @@
-# Azeroth Survivor Reborn Trainer 0.6.2
+# Azeroth Survivor Reborn Trainer 0.6.3
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
-original 0.6.3 build and the newer `d76345ce7a4e` executable layout.
+original 0.6.3 game build and the newer `d76345ce7a4e` and `a02914e85f9b` executable layouts.
 A separate trainer for **[Azeroth Survivors: Reborn](https://azreborn.com/)**.
 Reborn is a different game fork with its own executable, player layout and save
 format. This repository has independent releases and version history.
@@ -75,9 +75,17 @@ login or credentials are required.
 
 Live controls discover configuration addresses, player stride, vector/index fields,
 and combat stat offsets from unique executable code patterns. Compatible updates
-within the two verified layout families can attach without adding their file hash.
+within the three verified layout families can attach without adding their file hash.
 Ambiguous patterns or unknown structural families block writes. Arbitrary future
 versions cannot be guaranteed compatible.
+
+The `a02914e85f9b` update moved the configuration to 8-byte alignment, changed
+the hero size and stat/name offsets, and switched a serializer's hero register
+from RDI to RBX. Detection now supports both verified register variants and
+corroborates relocated configuration blocks against initialization and speed
+readers. The new player family also requires independent name and health/XP
+code anchors. Read-only live validation confirmed its configuration and solo
+hero fields. New structural families still need verification before writes.
 
 Discovery uses a bounded cache with file identity and a five-second freshness window; loaded instructions and hero
 identity are rechecked before writes. Duplicate stack references to one hero are

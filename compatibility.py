@@ -78,13 +78,37 @@ def _resolve(path, size, modified, created, file_id, generation):
             rva = text[2] + match.start()
             target = rva + 7 + struct.unpack_from('<i', match.group(), 3)[0]
             config = target - 0x208
-            if config % 32 == 0 and data[2] <= config and config + 0x234 <= data[2] + data[1]:
+            if config % 8 == 0 and data[2] <= config and config + 0x234 <= data[2] + data[1]:
                 readers[config].append((rva, match.group()))
-        candidates = [(rva, values) for rva, values in readers.items() if len(values) >= 2]
+        candidates = []
+        for config, values in readers.items():
+            if len(values) < 2:
+                continue
+            guards = {}
+            corroborated = set()
+            # 32-byte placement was incidental to older linkers. For other
+            # 8-byte-aligned blocks, corroborate the flag with the initialization
+            # state and clock-speed readers in the same helper, not live values.
+            for offset, pattern, displacement, length in (
+                    (0x230, rb'\x8b\x05....', 2, 6),
+                    (0x1F8, rb'\xf3\x0f\x10\x05....', 4, 8)):
+                for rva, _ in values:
+                    start = max(0, rva - text[2] - 32)
+                    window = code[start:rva - text[2] + 0x140]
+                    for match in re.finditer(pattern, window, re.DOTALL):
+                        address = text[2] + start + match.start()
+                        target = address + length + struct.unpack_from('<i', match.group(), displacement)[0]
+                        if target == config + offset:
+                            guards[address] = match.group()
+                            corroborated.add(offset)
+            if config % 32 and corroborated != {0x230, 0x1F8}:
+                continue
+            candidates.append((config, values, guards))
         if len(candidates) != 1:
-            raise ValueError('configuration readers do not identify a unique block')
-        config, values = candidates[0]
+            raise ValueError(f'configuration readers do not identify a unique block (found {len(candidates)} verified blocks)')
+        config, values, guards = candidates[0]
         signatures.update(values)
+        signatures.update(guards)
         # The stats serializer independently establishes vector, index, stride,
         # and four contiguous 16-byte stat blocks. Capture relocations as guards.
         m = unique(rb'\x48\x8b\x89(.{4})\x49\x8b\x95(.{4})\x48\x39\xd1'
@@ -97,18 +121,39 @@ def _resolve(path, size, modified, created, file_id, generation):
             raise ValueError('inconsistent player serializer')
         # These name/header families have been verified independently. Unknown
         # structural changes stay blocked, even if a few opcodes still match.
-        families = {0x1798: (0x1038, 0x1670, 0x1744), 0x1858: (0x10E0, 0x1740, 0x1804)}
+        families = {0x1798: (0x1038, 0x1670, 0x1744), 0x1858: (0x10E0, 0x1740, 0x1804),
+                    0x1870: (0x10F8, 0x1758, 0x181C)}
         name, expected_stats, rerolls = families.get(stride, (None, None, None))
         if stats != expected_stats or not 0x800 <= pointer < index < 0x1200:
             raise ValueError('player layout family has not been verified')
-        gold = unique(re.escape(bytes.fromhex('488d875c010000488d8f')) + rb'.{4}'
-                      + re.escape(bytes.fromhex('488d97500100004c8d87')) + rb'.{4}')
+        # The compiler now holds the same hero in RBX instead of RDI. Match
+        # complete, consistent register variants rather than wildcarding ModRM.
+        gold_patterns = []
+        for base in (3, 7):
+            gold_patterns.append(re.escape(b'\x48\x8d' + bytes([0x80 | base]) + struct.pack('<I', 0x15C)
+                                           + b'\x48\x8d' + bytes([0x88 | base])) + rb'.{4}'
+                                 + re.escape(b'\x48\x8d' + bytes([0x90 | base]) + struct.pack('<I', 0x150)
+                                             + b'\x4c\x8d' + bytes([0x80 | base])) + rb'.{4}')
+        gold = unique(b'(?:' + b'|'.join(gold_patterns) + b')')
+        base = gold.group()[2] & 7
         # The reroll address in the same run serializer must match the family.
         nearby = code[gold.start():gold.start() + 0x150]
-        rr = b'\x48\x81\xc7' + struct.pack('<I', rerolls)
+        rr = b'\x48\x81' + bytes([0xC0 | base]) + struct.pack('<I', rerolls)
         if nearby.count(rr) != 1:
             raise ValueError('reroll serializer changed')
         signatures[text[2] + gold.start() + nearby.index(rr)] = rr
+        if stride == 0x1870:
+            # Independently verify the new family's name string and unchanged
+            # health/XP header before allowing Player's shared field mapping.
+            unique(re.escape(b'\x48\x8d\x3c\x08\x48\x81\xc7' + struct.pack('<I', name))
+                   + rb'\xc7\x85.{4}\x00{4}'
+                   + re.escape(b'\x48\x83\xbc\x08' + struct.pack('<I', name) + b'\xff'))
+            for modrm, offset in ((0x90 | base, 0xF8), (0x88 | base, 0x100),
+                                  (0x80 | base, 0x154), (0x80 | base, 0x158)):
+                raw = b'\x48\x8d' + bytes([modrm]) + struct.pack('<I', offset)
+                if nearby.count(raw) != 1:
+                    raise ValueError('player health/XP serializer changed')
+                signatures[text[2] + gold.start() + nearby.index(raw)] = raw
         unique(re.escape(b'\x8b\x88' + struct.pack('<I', stats + 8)))
         return Layout(digest, config, signatures, stride, pointer - 8, index, name, stats, rerolls)
     except (ValueError, StopIteration, struct.error, IndexError) as exc:
