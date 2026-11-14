@@ -18,9 +18,10 @@ import queue
 
 import psutil
 from player import Player, STATS
+from compatibility import resolve
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.3.0'
+VERSION = '0.4.0'
 PROCESS_NAME = 'AzerothSurvivorsGame.exe'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
@@ -141,10 +142,10 @@ class Trainer:
         self.process = games[0]
         self.created = self.process.create_time()
         self.path = self.process.exe()
-        with open(self.path, 'rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        if digest != BUILD:
-            raise RuntimeError(f'Unsupported Reborn build {digest[:12]}. Controls are blocked.')
+        self.profile = resolve(self.path)
+        self.build = self.profile.digest
+        self.config_rva = self.profile.config
+        self.signatures = self.profile.signatures
         modules = [m for m in self.process.memory_maps(grouped=False)
                    if os.path.normcase(m.path) == os.path.normcase(self.path)]
         if not modules:
@@ -176,17 +177,17 @@ class Trainer:
             raise
 
     def identity(self):
-        return self.process.pid, self.created, self.base, BUILD
+        return self.process.pid, self.created, self.base, getattr(self, 'build', BUILD)
 
     def guard(self):
         if not self.process.is_running() or self.process.create_time() != self.created:
             raise RuntimeError('Game restarted; reconnect before changing options.')
         if os.path.normcase(self.process.exe()) != os.path.normcase(self.path):
             raise RuntimeError('Game process path changed.')
-        for rva, expected in SIGNATURES.items():
+        for rva, expected in getattr(self, 'signatures', SIGNATURES).items():
             if self.memory.read(self.base + rva, len(expected)) != expected:
                 raise RuntimeError('Game instruction mismatch; no changes applied.')
-        config = self.memory.read(self.base + CONFIG_RVA, 0x234)
+        config = self.memory.read(self.base + getattr(self, 'config_rva', CONFIG_RVA), 0x234)
         if struct.unpack_from('<I', config, 0x230)[0] != 0:
             raise RuntimeError('Reborn configuration is not initialized.')
         if any(config[FEATURES[k].offset] not in (0, 1) for k in FEATURES if FEATURES[k].fmt == 'B'):
@@ -221,7 +222,7 @@ class Trainer:
         change['after'] = after.hex()
         self.persist()  # recovery information reaches disk before any game write
         self.guard()
-        address = self.base + CONFIG_RVA + feature.offset
+        address = self.base + getattr(self, 'config_rva', CONFIG_RVA) + feature.offset
         if self.memory.read(address, len(before)) != before:
             raise RuntimeError('Game configuration changed during the operation.')
         self.memory.write(address, after)
@@ -234,7 +235,7 @@ class Trainer:
         for key, change in list(self.changes.items()):
             self.guard()
             feature = FEATURES[key]
-            address = self.base + CONFIG_RVA + feature.offset
+            address = self.base + getattr(self, 'config_rva', CONFIG_RVA) + feature.offset
             before, after = bytes.fromhex(change['before']), bytes.fromhex(change['after'])
             if self.memory.read(address, len(after)) == after:
                 self.memory.write(address, before)
@@ -528,6 +529,8 @@ def run_gui(max_player=False):
             status.set('Locate the Reborn game executable first.')
             return
         try:
+            if resolve(path).digest != BUILD:
+                raise RuntimeError('Live controls support this layout, but permanent save upgrades require a separately verified save format. No save changed.')
             folder = ROOT / 'backups' / datetime.now().strftime('%Y%m%d-%H%M%S-%f')
             result = prepare_upgrade(path, folder)
             if find_games(path):
@@ -618,7 +621,7 @@ def run_gui(max_player=False):
                 trainer = result
                 saved['game_exe'] = trainer.path
                 atomic_json(SETTINGS, saved)
-                status.set(f'Connected · PID {trainer.process.pid} · Reborn 0.6.3')
+                status.set(f'Connected · PID {trainer.process.pid} · layout validated · {trainer.build[:12]}')
                 detail.set(trainer.path)
                 refresh_values()
                 root.after(100, find_hero)
@@ -645,6 +648,7 @@ def run_gui(max_player=False):
                 for held in player_holds.values():
                     held.set(False)
                 hero_status.set(str(exc))
+                status.set('Player controls stopped. Find hero again after starting a solo run.')
         for widget in player_widgets:
             widget.configure(state='normal' if player and player.lease else 'disabled')
         if not trainer and not connecting:
@@ -693,7 +697,7 @@ def main():
         elif args.command == 'restore':
             trainer.restore()
         print(json.dumps(dict(app=APP_NAME, version=VERSION, pid=trainer.process.pid,
-                              game=trainer.path, build=BUILD, values=trainer.values()), indent=2))
+                              game=trainer.path, build=trainer.build, values=trainer.values()), indent=2))
     finally:
         trainer.close()
 

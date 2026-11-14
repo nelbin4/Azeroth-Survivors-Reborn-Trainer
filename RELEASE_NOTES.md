@@ -1,15 +1,15 @@
-A dedicated release for **Azeroth Survivors: Reborn**, the game at https://azreborn.com/.
-This trainer has its own repository and releases, separate from the original Azeroth Survivors trainer.
+Compatibility and detection update for Azeroth Survivors: Reborn.
 
-- 15 guarded solo stat/resource controls with Set and Hold, including maximum health, run gold and free rerolls.
-- Max all stats, full healing, native God mode and XP assistance.
-- Native run options and clock controls.
-- Offline permanent progression upgrades with authenticated save backups.
-- Save game backup, including on-disk talent settings.
-- Process/build validation, conditional restore and 20 automated tests.
+- Supports the newer d76345ce7a4e build alongside the original 0.6.3 executable.
+- Discovers live configuration addresses and player layout fields from unique code patterns.
+- Compatible updates within verified layout families no longer need a hash allowlist entry.
+- Groups duplicate stack references by hero allocation and identity; distinct heroes stay blocked.
+- Caches layout discovery and skips unchanged Hold writes.
+- Preserves live instruction, process, solo-player and readback checks.
+- 28 automated tests; live damage and God-mode write/restore checks passed on the newer build.
 
-Supported game: Reborn 0.6.3 (744e2b307), Windows x64.
-Download and extract the portable zip, start a solo run, then open the trainer.
-Keep it open for Hold controls. Find hero again for each new run.
+Unknown structural changes remain blocked. Permanent save upgrades still require
+the separately verified original save format/build; this release does not enable
+cloud overwrites or unverified newer save editing.
 
-Save backups are local. Cloud overwrites, individual talent allocations, paid entitlements and zone-completion editing are not implemented.
+Official game: https://azreborn.com/

@@ -1,6 +1,7 @@
-# Azeroth Survivor Reborn Trainer 0.3.0
+# Azeroth Survivor Reborn Trainer 0.4.0
 
-Portable Windows trainer for Azeroth Survivors: Reborn 0.6.3 (744e2b307).
+Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
+original 0.6.3 build and the newer `d76345ce7a4e` executable layout.
 A separate trainer for **[Azeroth Survivors: Reborn](https://azreborn.com/)**.
 Reborn is a different game fork with its own executable, player layout and save
 format. This repository has independent releases and version history.
@@ -11,6 +12,22 @@ Download the portable zip from [Reborn Trainer Releases](https://github.com/nelb
 extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. Start a solo run,
 then click **Find hero** and **Max all stats + God mode**. Keep the trainer open.
 Player controls require a verified solo character.
+
+## Update compatibility
+
+Live controls discover configuration addresses, player stride, vector/index fields,
+and combat stat offsets from unique executable code patterns. Compatible updates
+within the two verified layout families can attach without adding their file hash.
+Ambiguous patterns or unknown structural families block writes. Arbitrary future
+versions cannot be guaranteed compatible.
+
+Discovery is cached for an unchanged executable; loaded instructions and hero
+identity are rechecked before writes. Duplicate stack references to one hero are
+grouped by allocation and identity. Distinct hero allocations remain blocked.
+Hold polling skips unchanged values and uses no injected code.
+
+Permanent save upgrades remain restricted to the separately verified original
+save format/build. A compatible live layout does not establish save compatibility.
 
 ## Player controls
 
@@ -46,7 +63,7 @@ Find hero again after a new run. Leave the trainer open to keep Hold active.
 ## Native options
 
 God mode, auto-pick cards, all-zone access, showcase pickups, rift/bar/clock/vault
-options, run clock speed (0.1–10), and next-run starting minute (0–60).
+options, run clock speed (0.1â€“10), and next-run starting minute (0â€“60).
 Some options are read only on menu entry or a new run. The native unlock-all
 flag alone has not been verified to grant progression; use the save upgrade tab.
 The game can mark these configurations as modified/test runs.
@@ -80,11 +97,11 @@ unchanged player stats from the same level. Run gold and rerolls are one-time re
 progression are not undone. Process restarts invalidate recovery records.
 A crash may leave held stats until the game recalculates them or the run ends.
 
-Executable SHA-256:
+Originally verified executable SHA-256:
 `ab7b6332a6c47e4c29188e44932939e560b274cf06e0f212cb3ada119a3a3d35`.
-The trainer checks the executable hash, instruction signatures, process identity,
+The trainer records the executable hash and checks discovered instruction signatures, process identity,
 solo allocation, character GUID/name and readback before accepting writes.
-Unknown builds are blocked. Player discovery reads thread stacks without hooks.
+Unknown or ambiguous layout families are blocked. Player discovery reads thread stacks without hooks.
 No game executable files are patched. Separate from the original game's trainer.
 
 ## Development

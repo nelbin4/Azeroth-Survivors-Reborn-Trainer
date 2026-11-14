@@ -3,6 +3,7 @@ import ctypes
 from ctypes import wintypes
 import json
 import struct
+import re
 
 import psutil
 
@@ -39,27 +40,37 @@ def stacks(process, memory):
             kernel.CloseHandle(handle)
 
 
-def discover(process, memory):
+def discover(process, memory, layout=None):
+    vector = layout.vector if layout else 0xBA8
+    index_offset = layout.index if layout else 0xE60
+    stride = layout.stride if layout else 0x1798
+    name_offset = layout.name if layout else 0x1038
     found = []
     for tid, bottom, top in stacks(process, memory):
         try:
             raw = memory.read(bottom, top - bottom)
         except OSError:
             continue
-        for i in range(0xBA8, len(raw) - 0x300, 8):
+        # Search candidate Rust vector headers in native regex code rather than
+        # unpacking every eight bytes of every thread stack in Python.
+        limit = len(raw) - max(0x300, index_offset - vector + 8)
+        for match in re.finditer(rb'(?=([\x01-\x04]\x00{7}.{8}[\x01-\x04]\x00{7}))', raw, re.DOTALL):
+            i = match.start()
+            if i < vector or i >= limit or i % 8:
+                continue
             cap, pointer, count = struct.unpack_from('<3Q', raw, i)
             if not 1 <= count <= cap <= 4 or pointer % 8 or not 0x10000 <= pointer < 0x7FFFFFFFF000:
                 continue
-            game = bottom + i - 0xBA8
-            index = struct.unpack_from('<Q', raw, i - 0xBA8 + 0xE60)[0]
+            game = bottom + i - vector
+            index = struct.unpack_from('<Q', raw, i - vector + index_offset)[0]
             if index >= count:
                 continue
-            hero = pointer + index * 0x1798
+            hero = pointer + index * stride
             try:
-                h = memory.read(hero, 0x1798)
+                h = memory.read(hero, stride)
                 guid, hp, maximum = struct.unpack_from('<3Q', h, 0xF0)
                 level = struct.unpack_from('<I', h, 0x150)[0]
-                ncap, nptr, nlen = struct.unpack_from('<3Q', h, 0x1038)
+                ncap, nptr, nlen = struct.unpack_from('<3Q', h, name_offset)
                 if not (guid and 1 <= maximum <= 10**12 and hp <= maximum and 1 <= level <= 10000
                         and 1 <= nlen <= ncap <= 128 and 0x10000 <= nptr < 0x7FFFFFFFF000):
                     continue

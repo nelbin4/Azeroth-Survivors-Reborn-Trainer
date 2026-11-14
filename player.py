@@ -1,5 +1,5 @@
 """Solo hero discovery and guarded stat controls for the verified Reborn build."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import struct
 
 from stack_probe import discover
@@ -61,22 +61,40 @@ class Player:
         self.frozen = {}
         self.original = {}
         self.xp_assist = False
+        profile = getattr(trainer, 'profile', None)
+        # Real trainers carry a resolved Layout; test doubles use legacy defaults.
+        from compatibility import Layout
+        self.profile = profile if isinstance(profile, Layout) else None
+        self.stride = self.profile.stride if self.profile else STRIDE
+        self.name_offset = self.profile.name if self.profile else NAME_OFFSET
+        self.vector = self.profile.vector if self.profile else 0xBA8
+        self.index = self.profile.index if self.profile else 0xE60
+        self.stats = dict(STATS)
+        if self.profile:
+            for key, stat in STATS.items():
+                if 0x1670 <= stat.offset <= 0x16AC:
+                    self.stats[key] = replace(stat, offset=stat.offset + self.profile.stats - 0x1670)
+            self.stats['rerolls'] = replace(STATS['rerolls'], offset=self.profile.rerolls)
         self.verify_code()
 
     def verify_code(self):
         self.trainer.guard()
-        for rva, expected in PLAYER_SIGNATURES.items():
+        # Trainer.guard already checks every resolved player/config code anchor.
+        for rva, expected in ({} if self.profile else PLAYER_SIGNATURES).items():
             if self.memory.read(self.trainer.base + rva, len(expected)) != expected:
                 raise RuntimeError('Reborn player instruction mismatch; player changes blocked.')
 
     def connect(self):
         self.verify_code()
         self.stop()
-        candidates = discover(self.trainer.process, self.memory)
+        candidates = discover(self.trainer.process, self.memory, self.profile)
         candidates = [c for c in candidates if c['count'] == 1 and c['index'] == 0]
-        if len(candidates) != 1:
-            raise RuntimeError(f'Found {len(candidates)} verified solo heroes. Start a solo run, then Find hero.')
-        self.lease = candidates[0]
+        heroes = {(c['hero'], c['guid'], c['name']) for c in candidates}
+        if len(heroes) != 1:
+            raise RuntimeError(f'Found {len(heroes)} distinct verified solo heroes. Start a solo run, then Find hero.')
+        # Stack frames can retain copies of the same Game. Count allocations,
+        # not references; choose the outermost frame and revalidate before writes.
+        self.lease = max(candidates, key=lambda c: int(c['game'], 16))
         return self.snapshot()
 
     def snapshot(self):
@@ -84,15 +102,15 @@ class Player:
         if not self.lease:
             raise RuntimeError('Click Find hero while playing solo.')
         game = int(self.lease['game'], 16)
-        cap, pointer, count = struct.unpack('<3Q', self.memory.read(game + 0xBA8, 24))
-        index, = struct.unpack('<Q', self.memory.read(game + 0xE60, 8))
+        cap, pointer, count = struct.unpack('<3Q', self.memory.read(game + self.vector, 24))
+        index, = struct.unpack('<Q', self.memory.read(game + self.index, 8))
         if not (count == 1 and index == 0 and 1 <= cap <= 4
                 and pointer == int(self.lease['hero'], 16)):
             raise RuntimeError('Solo hero allocation changed. Stop and Find hero again.')
-        raw = self.memory.read(pointer, STRIDE)
+        raw = self.memory.read(pointer, self.stride)
         guid, hp, maximum = struct.unpack_from('<3Q', raw, 0xF0)
         level, xp, next_xp, gold = struct.unpack_from('<4I', raw, 0x150)
-        capacity, name_pointer, length = struct.unpack_from('<3Q', raw, NAME_OFFSET)
+        capacity, name_pointer, length = struct.unpack_from('<3Q', raw, self.name_offset)
         if (guid != self.lease['guid'] or not 1 <= length <= capacity <= 128
                 or not 1 <= level <= 10000 or not 1 <= maximum <= 10**12 or hp > maximum):
             raise RuntimeError('Hero identity or health changed unexpectedly. Find hero again.')
@@ -101,11 +119,11 @@ class Player:
             raise RuntimeError('The active character changed. Find hero again.')
         if level < self.lease['level']:
             raise RuntimeError('A new run started. Find hero to resume player controls.')
-        values = {key: struct.unpack_from('<' + stat.fmt, raw, stat.offset)[0] for key, stat in STATS.items()}
+        values = {key: struct.unpack_from('<' + stat.fmt, raw, stat.offset)[0] for key, stat in self.stats.items()}
         ceilings = {'max_health': 10**12, 'run_gold': 0xFFFFFFFF}
         if any(v > ceilings.get(k, 1000000) for k, v in values.items()):
             raise RuntimeError('Unexpected player stat layout. Changes blocked.')
-        if self.memory.read(game + 0xBA8, 24) != struct.pack('<3Q', cap, pointer, count):
+        if self.memory.read(game + self.vector, 24) != struct.pack('<3Q', cap, pointer, count):
             raise RuntimeError('Hero moved during the snapshot; retry.')
         return dict(hero=pointer, guid=guid, name=name, level=level, hp=hp, maximum=maximum,
                     xp=xp, next_xp=next_xp, gold=gold, values=values)
@@ -115,7 +133,7 @@ class Player:
         for key in ('hero', 'guid', 'name', 'level'):
             if current[key] != before_snapshot[key]:
                 raise RuntimeError('Hero changed before writing. Nothing applied.')
-        stat_key = next((k for k, s in STATS.items() if s.offset == offset), None)
+        stat_key = next((k for k, s in self.stats.items() if s.offset == offset), None)
         if stat_key and current['values'][stat_key] != before_snapshot['values'][stat_key]:
             raise RuntimeError('The game recalculated this stat before writing. Retry.')
         address = current['hero'] + offset
@@ -125,7 +143,7 @@ class Player:
             raise RuntimeError('Player value changed before readback; retry.')
 
     def set_stat(self, key, value):
-        stat = STATS[key]
+        stat = self.stats[key]
         value = bounded_integer(value, stat.maximum)
         if key == 'max_health' and value < 1:
             raise ValueError('Maximum health must be at least 1.')
@@ -172,10 +190,12 @@ class Player:
             raise RuntimeError('A new run started. Find hero to resume player controls.')
         self.lease['level'] = snapshot['level']
         for key, value in list(self.frozen.items()):
-            self.set_stat(key, value)
+            if snapshot['values'][key] != value:
+                self.set_stat(key, value)
         if 'max_health' in self.frozen:
-            self.heal()
-        if self.xp_assist:
+            if snapshot['hp'] != snapshot['maximum']:
+                self.heal()
+        if self.xp_assist and snapshot['xp'] != snapshot['next_xp'] - 1:
             self.ready_level()
         return self.snapshot()
 
@@ -191,7 +211,7 @@ class Player:
             if key == 'max_health' and snapshot['hp'] > original['before']:
                 self.write(0xF8, 'Q', original['before'], snapshot)
                 snapshot = self.snapshot()
-            self.write(STATS[key].offset, STATS[key].fmt, original['before'], snapshot)
+            self.write(self.stats[key].offset, self.stats[key].fmt, original['before'], snapshot)
         self.original.pop(key, None)
 
     def stop(self):

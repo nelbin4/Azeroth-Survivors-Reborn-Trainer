@@ -70,6 +70,20 @@ class PlayerTests(unittest.TestCase):
             self.assertEqual(self.t.memory.writes, [])
             self.t.memory.put(offset, old)
 
+    def test_duplicate_references_are_one_hero_but_distinct_allocations_block(self):
+        candidate = dict(self.p.lease, count=1, index=0)
+        with patch('player.discover', return_value=[candidate, dict(candidate)]):
+            self.assertEqual(self.p.connect()['guid'], 123)
+        with patch('player.discover', return_value=[candidate, dict(candidate, hero='0x40000')]):
+            with self.assertRaisesRegex(RuntimeError, '2 distinct'):
+                self.p.connect()
+
+    def test_unchanged_hold_tick_does_not_write(self):
+        self.p.maximize()
+        self.t.memory.writes.clear()
+        self.p.tick()
+        self.assertEqual(self.t.memory.writes, [])
+
 
 class SaveTests(unittest.TestCase):
     def setUp(self):
