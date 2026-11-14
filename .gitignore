@@ -17,3 +17,6 @@ __pycache__/
 venv/
 UserData/
 WTF/
+.updates/
+*.previous.exe
+design-qa.md
