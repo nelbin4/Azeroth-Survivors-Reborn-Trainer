@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.7.0
+# Azeroth Survivor Reborn Trainer 0.7.1
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -80,7 +80,7 @@ is intact; v0.6.4 fixes subsequent update restarts.
 
 ## Update compatibility
 
-v0.7.0 derives the 12 combat/utility stat fields from their actual names in the
+The trainer derives the 12 combat/utility stat fields from their actual names in the
 game's Stats formatter, confirms their 32-bit integer types, and independently
 checks the player array, name, health/XP and reroll serializers. The player
 structure size is no longer restricted to a family list when that evidence is
@@ -99,8 +99,16 @@ including its changed player size, name/stat/reroll offsets and game vector.
 The native configuration and all 15 supported player fields were read back
 successfully from a live solo hero in the running game.
 
-Discovery uses a bounded cache with file identity and a five-second freshness window; loaded instructions and hero
-identity are rechecked before writes. Duplicate stack references to one hero are
+Discovery uses file identity and a five-second freshness window. After refreshing
+the complete executable SHA-256, unchanged bytes reuse a bounded cache of verified
+instruction proofs instead of repeating disassembly. Loaded instructions and hero
+identity are still rechecked before writes.
+
+Instruction searches accept verified register allocations, short/near bounds
+branches, alignment NOPs and reordered vector loads. Configuration candidates must
+agree with their initialization/speed readers and a constructor's related flag
+stores. Solo discovery supports bounded vector capacities through 64 while still
+requiring exactly one active hero; multiple players remain blocked. Duplicate stack references to one hero are
 grouped by allocation and identity. Distinct hero allocations remain blocked.
 Hold polling skips unchanged values and uses no injected code.
 
@@ -141,6 +149,12 @@ Pause stops repeated writes; they resume only when you enable holds, use Max all
 stats, or find a hero again. Leave the trainer open to keep Hold active.
 
 ## Native options
+
+The Run options tab defaults to **run clock speed 3**, **next-run starting minute
+20**, and **Bosses also arrive on the clock enabled**. The GUI applies these values
+once after attaching to each verified game process. Later edits and Restore are
+preserved across reconnects to that same process. The starting minute applies to
+the next run when the game reads it.
 
 God mode, auto-pick cards, all-zone access, showcase pickups, rift/bar/clock/vault
 options, run clock speed (0.1 to 10), and next-run starting minute (0 to 60).

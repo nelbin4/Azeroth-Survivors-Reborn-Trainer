@@ -1,8 +1,22 @@
 import unittest
+from unittest.mock import Mock
 from runtime import RetrySchedule, same_session
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_run_defaults_retry_failures_and_reapply_only_for_new_processes(self):
+        from runtime import RunOptionDefaults
+        defaults = RunOptionDefaults()
+        trainer = Mock()
+        trainer.identity.return_value = (123, 456, 1000, 'build')
+        trainer.set.side_effect = RuntimeError('not initialized')
+        with self.assertRaises(RuntimeError):
+            defaults.apply(trainer)
+        trainer.set.side_effect = None
+        self.assertTrue(defaults.apply(trainer))
+        self.assertFalse(defaults.apply(trainer))
+        trainer.identity.return_value = (123, 457, 1000, 'build')
+        self.assertTrue(defaults.apply(trainer))
     def test_failures_back_off_and_reset_after_reconnect(self):
         retry = RetrySchedule()
         now = 10

@@ -59,6 +59,22 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.t.values()['god'], 0)
         self.assertFalse(self.t.changes)
 
+    def test_requested_run_defaults_use_minutes_and_preserve_later_edits(self):
+        from runtime import RunOptionDefaults
+        defaults = RunOptionDefaults()
+        self.assertTrue(defaults.apply(self.t))
+        values = self.t.values()
+        self.assertEqual((values['timescale'], values['clock'], values['rift_clock']), (3, 20, 1))
+        self.assertEqual(struct.unpack('<f', self.t.memory.read(trainer.CONFIG_RVA + 0x1FC, 4))[0], 1200)
+        self.t.set('timescale', 2)
+        self.t.set('clock', 5)
+        self.t.set('rift_clock', 0)
+        self.assertFalse(defaults.apply(self.t))
+        values = self.t.values()
+        self.assertEqual((values['timescale'], values['clock'], values['rift_clock']), (2, 5, 0))
+        self.t.restore()
+        self.assertEqual(self.t.values()['timescale'], 1)
+
     def test_restore_keeps_external_change(self):
         self.t.set('timescale', 2)
         self.t.memory.put(trainer.CONFIG_RVA + 0x1F8, struct.pack('<f', 3))

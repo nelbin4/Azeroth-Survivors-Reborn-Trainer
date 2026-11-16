@@ -1,16 +1,15 @@
-Independent named-field discovery for Azeroth Survivor Reborn Trainer v0.7.0.
+Broader verified discovery and run defaults for Azeroth Survivor Reborn Trainer v0.7.1.
 
-- Supports build 6c2b16d2b363 without adding another player-size family entry.
-- Derives all 12 combat/utility stat offsets from their field names and verifies their concrete 32-bit integer formatter types.
-- Independently cross-checks the player array, name, health/XP, combat and two resource serializers before enabling memory controls.
-- Supports verified future player relocations and reordered named stats without a new hash or family entry; retains known older layouts as a metadata fallback.
-- Rejects mismatched arrays, duplicate/out-of-bounds fields, wrong formatter types, partial pointer overwrites, pointer truncation and incomplete code evidence.
-- Bounds disassembly to candidate formatter functions and caches the discovered layout; live holds only recheck loaded guards and hero identity.
-- Includes Capstone's native decoder in the portable executable, with a real packaged --help startup check in the release workflow.
-- 64 automated tests pass, including an unlisted future layout with reordered stats and a backend write/hold/restore test using that mapping.
+- Replaces register-specific player-array, name and independent resource searches with instruction-validated matches.
+- Supports equivalent register allocations, short/near bounds branches, alignment NOPs and reordered stat-vector loads.
+- Broadens configuration readers across registers while requiring related constructor flags, clock storage, and independent initialization/speed corroboration.
+- Reuses verified layout proofs only after refreshing the full executable hash; changed binaries are revalidated and loaded guards still run before writes.
+- Supports solo vector capacities through 64 while retaining hero identity and multiplayer write guards.
+- Run options now default to clock speed 3, next-run minute 20 and Bosses also arrive on the clock enabled.
+- Applies run defaults once per verified process identity; subsequent manual edits survive reconnects.
+- 76 automated tests pass, including renamed/padded independent helpers, mismatched/duplicate candidates, code-change cache invalidation, larger solo allocations, and native minutes-to-seconds/default behavior.
 
-The native configuration and all 15 supported fields were verified read-only
-on a live solo hero in the running 6c2b16d2b363 game. Arbitrary future rewrites still cannot
-be guaranteed compatible; the trainer blocks writes when proof is incomplete.
-Existing Run/Stop, Find Hero with automatic Max, updater restart fixes and save
-restrictions remain in place. Official game: https://azreborn.com/
+Retains v0.7.0 named stat discovery and the verified updater restart workflow.
+Future compiler/schema changes can still require an update. Uncertain mappings
+remain blocked; save-format and cloud-save restrictions are unchanged.
+Official game: https://azreborn.com/

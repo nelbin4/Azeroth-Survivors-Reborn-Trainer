@@ -103,6 +103,27 @@ class PlayerTests(unittest.TestCase):
         player.stop()
         self.assertEqual(struct.unpack('<I', self.t.memory.read(address, 4))[0], 45)
 
+    def test_larger_solo_vector_capacity_does_not_break_discovery(self):
+        from stack_probe import discover
+        with patch('stack_probe.stacks', return_value=[(1, 0x10000, 0x13000)]):
+            for capacity in (8, 64):
+                self.t.memory.put(0x10BA8, struct.pack('<3Q', capacity, 0x20000, 1))
+                found = discover(self.t.process, self.t.memory)
+                self.assertEqual(len(found), 1)
+                self.assertEqual((found[0]['name'], found[0]['count']), ('hero', 1))
+            self.t.memory.put(0x10BA8, struct.pack('<3Q', 65, 0x20000, 1))
+            self.assertEqual(discover(self.t.process, self.t.memory), [])
+
+    def test_larger_capacity_keeps_identity_and_multiplayer_write_guards(self):
+        self.t.memory.put(0x10BA8, struct.pack('<3Q', 32, 0x20000, 1))
+        self.p.set_stat('damage', 321)
+        self.assertEqual(self.p.snapshot()['values']['damage'], 321)
+        self.t.memory.writes.clear()
+        self.t.memory.put(0x10BA8, struct.pack('<3Q', 32, 0x20000, 2))
+        with self.assertRaises(RuntimeError):
+            self.p.set_stat('damage', 9999)
+        self.assertEqual(self.t.memory.writes, [])
+
 
 class SaveTests(unittest.TestCase):
     def setUp(self):

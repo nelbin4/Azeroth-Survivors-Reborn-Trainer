@@ -16,7 +16,7 @@ import sys
 import threading
 import queue
 import time
-from runtime import RetrySchedule, same_session
+from runtime import RetrySchedule, same_session, RunOptionDefaults, RUN_OPTION_DEFAULTS
 from game_process import GameLauncher, GameSession, PROCESS_NAME, same_path
 import updater
 import webbrowser
@@ -26,7 +26,7 @@ from player import Player, STATS
 from compatibility import resolve
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.7.0'
+VERSION = '0.7.1'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 JOURNAL = ROOT / 'reborn-recovery.json'
@@ -369,6 +369,7 @@ def run_gui():
     launcher = GameLauncher()
     next_process_scan = 0
     retry = RetrySchedule()
+    run_defaults = RunOptionDefaults()
     connecting = False
     closing = False
     try:
@@ -394,11 +395,11 @@ def run_gui():
         row = ttk.Frame(options)
         row.pack(fill='x', pady=5)
         if feature.fmt == 'B':
-            variable = tk.BooleanVar(value=False)
+            variable = tk.BooleanVar(value=bool(RUN_OPTION_DEFAULTS.get(key, False)))
             widget = ttk.Checkbutton(row, text=feature.label, variable=variable, command=lambda k=key: toggle(k))
             widget.pack(side='left')
         else:
-            variable = tk.StringVar(value='1' if key == 'timescale' else '0')
+            variable = tk.StringVar(value=str(RUN_OPTION_DEFAULTS.get(key, 0)))
             ttk.Label(row, text=feature.label).pack(side='left')
             widget = ttk.Entry(row, textvariable=variable, width=8)
             widget.pack(side='right')
@@ -974,6 +975,10 @@ def run_gui():
                     atomic_json(SETTINGS, saved)
                     status.set(f'Connected · PID {trainer.process.pid} · layout validated · {trainer.build[:12]}')
                     detail.set(trainer.path)
+                    try:
+                        run_defaults.apply(trainer)
+                    except Exception as exc:
+                        error(exc)
                     refresh_values()
                     root.after(100, find_hero)
         except queue.Empty:

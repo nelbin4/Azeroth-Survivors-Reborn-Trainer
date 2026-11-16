@@ -1,5 +1,5 @@
 """Read-only discovery of compatible Reborn code/layout families."""
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
@@ -7,7 +7,12 @@ import re
 import struct
 import time
 from functools import lru_cache
+from threading import RLock
 from layout_proof import discover_stat_fields, MetadataUnavailable
+from code_search import config_anchors, rip_readers, stat_serializers, name_serializers, resource_serializers
+
+_PROOFS = OrderedDict()
+_PROOF_LOCK = RLock()
 
 
 @dataclass
@@ -40,6 +45,13 @@ def _resolve(path, size, modified, created, file_id, generation):
     state = Path(path).stat()
     if (state.st_size, state.st_mtime_ns, state.st_ctime_ns, state.st_ino) != (size, modified, created, file_id):
         raise RuntimeError('Game executable changed during layout discovery. Retry.')
+    # Refresh the complete file hash, but reuse costly instruction proofs when
+    # the bytes are identical. Loaded-image guards still run before every write.
+    with _PROOF_LOCK:
+        cached = _PROOFS.get(digest)
+        if cached is not None:
+            _PROOFS.move_to_end(digest)
+            return cached
     if digest == 'ab7b6332a6c47e4c29188e44932939e560b274cf06e0f212cb3ada119a3a3d35':
         guards = {0x7139363: '0f958208020000', 0x71417F8: '0fb68208020000',
                   0x6EB6123: '0fb635ee968303', 0x6D8750F: '488b89600e0000',
@@ -72,38 +84,30 @@ def _resolve(path, size, modified, created, file_id, generation):
             signatures[text[2] + match.start()] = match.group()
             return match
 
-        unique(re.escape(bytes.fromhex('0f958208020000')))
-        unique(re.escape(bytes.fromhex('0fb68208020000413a8008020000')))
+        signatures.update(config_anchors(code, text[2]))
         # Independent RIP-relative readers must agree on the configuration block.
         readers = defaultdict(list)
-        for match in re.finditer(b'\x0f\xb6\x35....', code, re.DOTALL):
-            rva = text[2] + match.start()
-            target = rva + 7 + struct.unpack_from('<i', match.group(), 3)[0]
+        for rva, raw, target in rip_readers(code, text[2], 'byte'):
             config = target - 0x208
             if config % 8 == 0 and data[2] <= config and config + 0x234 <= data[2] + data[1]:
-                readers[config].append((rva, match.group()))
+                readers[config].append((rva, raw))
         candidates = []
         for config, values in readers.items():
             if len(values) < 2:
                 continue
             guards = {}
             corroborated = set()
-            # 32-byte placement was incidental to older linkers. For other
-            # 8-byte-aligned blocks, corroborate the flag with the initialization
-            # state and clock-speed readers in the same helper, not live values.
-            for offset, pattern, displacement, length in (
-                    (0x230, rb'\x8b\x05....', 2, 6),
-                    (0x1F8, rb'\xf3\x0f\x10\x05....', 4, 8)):
+            # Corroborate every candidate through independent initialization
+            # and clock-speed readers, regardless of register or alignment.
+            for offset, kind in ((0x230, 'integer'), (0x1F8, 'float')):
                 for rva, _ in values:
                     start = max(0, rva - text[2] - 32)
                     window = code[start:rva - text[2] + 0x140]
-                    for match in re.finditer(pattern, window, re.DOTALL):
-                        address = text[2] + start + match.start()
-                        target = address + length + struct.unpack_from('<i', match.group(), displacement)[0]
+                    for address, raw, target in rip_readers(window, text[2] + start, kind):
                         if target == config + offset:
-                            guards[address] = match.group()
+                            guards[address] = raw
                             corroborated.add(offset)
-            if config % 32 and corroborated != {0x230, 0x1F8}:
+            if corroborated != {0x230, 0x1F8}:
                 continue
             candidates.append((config, values, guards))
         if len(candidates) != 1:
@@ -113,14 +117,13 @@ def _resolve(path, size, modified, created, file_id, generation):
         signatures.update(guards)
         # The stats serializer independently establishes vector, index, stride,
         # and four contiguous 16-byte stat blocks. Capture relocations as guards.
-        m = unique(rb'\x48\x8b\x89(.{4})\x49\x8b\x95(.{4})\x48\x39\xd1'
-                   rb'\x0f\x83.{4}\x49\x8b\x95(.{4})\x48\x69\xc9(.{4})'
-                   rb'\x48\x8d\x1c\x0a\x0f\x10\x84\x0a(.{4})'
-                   rb'\xf3\x0f\x6f\x8c\x0a(.{4})\xf3\x0f\x6f\x94\x0a(.{4})'
-                   rb'\xf3\x0f\x6f\x9c\x0a(.{4})')
-        index, count, pointer, stride, stats, second, third, fourth = [struct.unpack('<I', v)[0] for v in m.groups()]
-        if count != pointer + 8 or (second, third, fourth) != (stats + 16, stats + 32, stats + 48):
-            raise ValueError('inconsistent player serializer')
+        matches = stat_serializers(code, text[2])
+        if len(matches) != 1:
+            raise ValueError(f'expected one verified player serializer, found {len(matches)}')
+        m = matches[0]
+        index, count, pointer, stride = m.array
+        stats = m.value
+        signatures[m.rva] = m.raw
         if not (0x200 <= stride <= 0x10000 and stride % 8 == 0
                 and 0x160 <= stats <= stride - 64 and stats % 4 == 0
                 and 0x100 <= pointer < index < 0x10000):
@@ -140,23 +143,14 @@ def _resolve(path, size, modified, created, file_id, generation):
             signatures.update(field_guards)
             # The name-copy routine must independently use the same game vector,
             # selected index and element stride as the combat stat serializer.
-            names = []
-            pattern = (rb'\x48\x8b\x89(.{4})\x48\x8b\x96(.{4})\x48\x39\xd1'
-                       rb'\x4c\x89[\x85\x8d\x95\x9d\xa5\xad\xb5\xbd].{4}\x0f\x83.{4}'
-                       rb'\x48\x8b\x86(.{4})\x48\x69\xc9(.{4})\x4c\x8d\x2c\x08'
-                       rb'\x48\x8d\x3c\x08\x48\x81\xc7(.{4})'
-                       rb'(?:\xc7\x85.{4}\x00{4}|\x45\x31\xe4)\x48\x83\xbc\x08(.{4})\xff')
-            for candidate in re.finditer(pattern, code, re.DOTALL):
-                ni, nc, np, ns, first, repeated = [struct.unpack('<I', value)[0] for value in candidate.groups()]
-                if (ni, nc, np, ns) == (index, count, pointer, stride) and first == repeated:
-                    names.append(candidate)
+            names = name_serializers(code, text[2], (index, count, pointer, stride))
             if len(names) != 1:
                 raise ValueError('player name and array serializers do not agree uniquely')
             candidate = names[0]
-            name = struct.unpack('<I', candidate.group(5))[0]
+            name = candidate.value
             if name % 8 or not 0x160 <= name <= stats - 24:
                 raise ValueError('player name exceeds the verified element bounds')
-            signatures[text[2] + candidate.start()] = candidate.group()
+            signatures[candidate.rva] = candidate.raw
         # The compiler now holds the same hero in RBX instead of RDI. Match
         # complete, consistent register variants rather than wildcarding ModRM.
         gold_patterns = []
@@ -185,14 +179,12 @@ def _resolve(path, size, modified, created, file_id, generation):
             auxiliary = struct.unpack('<I', gold.group()[-4:])[0]
             if auxiliary != rerolls + 12:
                 raise ValueError('run resource serializer fields disagree')
-            u = lambda value: struct.pack('<I', value)
             # A second resource routine must independently address the same
             # field through the same player array, not just repeat an immediate.
-            unique(re.escape(b'\x48\x8b\x89' + u(index) + b'\x49\x8b\x97' + u(count) + b'\x48\x39\xd1')
-                   + rb'\x0f\x83.{4}'
-                   + re.escape(b'\x49\x8b\x87' + u(pointer) + b'\x48\x69\xc9' + u(stride) + b'\x4c\x8d\x2c\x08')
-                   + rb'.{0,192}?'
-                   + re.escape(b'\x49\x8d\x85' + u(auxiliary) + b'\x49\x81\xc5' + u(rerolls)))
+            resources = resource_serializers(code, text[2], (index, count, pointer, stride), rerolls)
+            if len(resources) != 1:
+                raise ValueError('resource and player array serializers do not agree uniquely')
+            signatures[resources[0].rva] = resources[0].raw
         rr = b'\x48\x81' + bytes([0xC0 | base]) + struct.pack('<I', rerolls)
         if nearby.count(rr) != 1:
             raise ValueError('reroll serializer changed')
@@ -213,6 +205,12 @@ def _resolve(path, size, modified, created, file_id, generation):
         damage = stats + (fields['damage'] if fields is not None else 8)
         unique(re.escape(b'\x8b\x88' + struct.pack('<I', damage))
                + (re.escape(b'\xf3\x4c\x0f\x2a\xc1') if fields is not None else b''))
-        return Layout(digest, config, signatures, stride, pointer - 8, index, name, stats, rerolls, fields)
+        layout = Layout(digest, config, signatures, stride, pointer - 8, index, name, stats, rerolls, fields)
+        with _PROOF_LOCK:
+            _PROOFS[digest] = layout
+            _PROOFS.move_to_end(digest)
+            while len(_PROOFS) > 4:
+                _PROOFS.popitem(last=False)
+        return layout
     except (ValueError, StopIteration, struct.error, IndexError) as exc:
         raise RuntimeError(f'Unsupported Reborn build {digest[:12]}: {exc}. Memory controls are blocked.') from exc

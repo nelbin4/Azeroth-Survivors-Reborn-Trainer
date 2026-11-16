@@ -2,7 +2,7 @@
 from dataclasses import dataclass, replace
 import struct
 
-from stack_probe import discover
+from stack_probe import discover, MAX_VECTOR_CAPACITY
 
 STRIDE = 0x1798
 NAME_OFFSET = 0x1038
@@ -105,7 +105,7 @@ class Player:
         game = int(self.lease['game'], 16)
         cap, pointer, count = struct.unpack('<3Q', self.memory.read(game + self.vector, 24))
         index, = struct.unpack('<Q', self.memory.read(game + self.index, 8))
-        if not (count == 1 and index == 0 and 1 <= cap <= 4
+        if not (count == 1 and index == 0 and 1 <= cap <= MAX_VECTOR_CAPACITY
                 and pointer == int(self.lease['hero'], 16)):
             raise RuntimeError('Solo hero allocation changed. Stop and Find hero again.')
         raw = self.memory.read(pointer, self.stride)

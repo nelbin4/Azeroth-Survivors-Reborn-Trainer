@@ -7,6 +7,7 @@ import re
 
 import psutil
 
+MAX_VECTOR_CAPACITY = 64
 
 
 class ThreadInfo(ctypes.Structure):
@@ -54,12 +55,12 @@ def discover(process, memory, layout=None):
         # Search candidate Rust vector headers in native regex code rather than
         # unpacking every eight bytes of every thread stack in Python.
         limit = len(raw) - max(0x300, index_offset - vector + 8)
-        for match in re.finditer(rb'(?=([\x01-\x04]\x00{7}.{8}[\x01-\x04]\x00{7}))', raw, re.DOTALL):
+        for match in re.finditer(rb'(?=([\x01-\x40]\x00{7}.{8}[\x01-\x04]\x00{7}))', raw, re.DOTALL):
             i = match.start()
             if i < vector or i >= limit or i % 8:
                 continue
             cap, pointer, count = struct.unpack_from('<3Q', raw, i)
-            if not 1 <= count <= cap <= 4 or pointer % 8 or not 0x10000 <= pointer < 0x7FFFFFFFF000:
+            if not 1 <= count <= cap <= MAX_VECTOR_CAPACITY or pointer % 8 or not 0x10000 <= pointer < 0x7FFFFFFFF000:
                 continue
             game = bottom + i - vector
             index = struct.unpack_from('<Q', raw, i - vector + index_offset)[0]

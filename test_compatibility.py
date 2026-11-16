@@ -25,6 +25,9 @@ def fixture(stride=0x1858, stats=0x1740, rerolls=0x1804, config=0x5000, base=7,
     put(0xF0, b'\x8b\x05' + struct.pack('<i', config + 0x230 - (0x10F0 + 6)))
     put(0x130, b'\xf3\x0f\x10\x05' + struct.pack('<i', config + 0x1F8 - (0x1130 + 8)))
     put(0x200, bytes.fromhex('0f958208020000'))
+    put(0x208, bytes.fromhex('0f958209020000'))
+    put(0x210, bytes.fromhex('0f95820a020000'))
+    put(0x218, bytes.fromhex('f30f11baf8010000'))
     put(0x220, bytes.fromhex('0fb68208020000413a8008020000'))
     u = lambda value: struct.pack('<I', value)
     put(0x280, b'\x48\x8b\x89' + u(index) + b'\x49\x8b\x95' + u(pointer + 8)
@@ -70,7 +73,7 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_ambiguous_anchor_blocks_discovery(self):
         blob = fixture()
-        blob[0xA00:0xA07] = bytes.fromhex('0f958208020000')
+        blob[0xA00:0xA20] = blob[0x600:0x620]
         with self.assertRaisesRegex(RuntimeError, 'found 2'):
             self.resolve_blob(blob)
 
@@ -158,3 +161,23 @@ class CompatibilityTests(unittest.TestCase):
             path.write_bytes(blob)
             clock.return_value = 6
             self.assertNotEqual(resolve(path).digest, first.digest)
+
+    def test_hash_refresh_reuses_proof_but_changed_code_is_revalidated(self):
+        from compatibility import stat_serializers
+        with tempfile.TemporaryDirectory() as temp, patch('compatibility.time.monotonic', return_value=1) as clock:
+            path = Path(temp) / 'game.exe'
+            blob = fixture()
+            blob[-1] = 211
+            path.write_bytes(blob)
+            with patch('compatibility.stat_serializers', wraps=stat_serializers) as search:
+                first = resolve(path)
+                self.assertEqual(search.call_count, 1)
+                clock.return_value = 6
+                self.assertIs(resolve(path), first)
+                self.assertEqual(search.call_count, 1)
+                blob[0x400 + 0x280 + 10] ^= 8
+                path.write_bytes(blob)
+                clock.return_value = 11
+                with self.assertRaises(RuntimeError):
+                    resolve(path)
+                self.assertEqual(search.call_count, 2)
