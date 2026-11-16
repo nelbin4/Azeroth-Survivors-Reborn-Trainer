@@ -7,6 +7,7 @@ import re
 import struct
 import time
 from functools import lru_cache
+from layout_proof import discover_stat_fields, MetadataUnavailable
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Layout:
     name: int
     stats: int
     rerolls: int
+    fields: dict | None = None
 
 
 def resolve(path):
@@ -119,17 +121,46 @@ def _resolve(path, size, modified, created, file_id, generation):
         index, count, pointer, stride, stats, second, third, fourth = [struct.unpack('<I', v)[0] for v in m.groups()]
         if count != pointer + 8 or (second, third, fourth) != (stats + 16, stats + 32, stats + 48):
             raise ValueError('inconsistent player serializer')
-        # These name/header families have been verified independently. Unknown
-        # structural changes stay blocked, even if a few opcodes still match.
+        if not (0x200 <= stride <= 0x10000 and stride % 8 == 0
+                and 0x160 <= stats <= stride - 64 and stats % 4 == 0
+                and 0x100 <= pointer < index < 0x10000):
+            raise ValueError('player serializer bounds are inconsistent')
+        # Keep verified legacy layouts as a fallback for stripped metadata.
+        # Current and future layouts instead derive every writable stat by name.
         families = {0x1798: (0x1038, 0x1670, 0x1744), 0x1858: (0x10E0, 0x1740, 0x1804),
                     0x1870: (0x10F8, 0x1758, 0x181C)}
         name, expected_stats, rerolls = families.get(stride, (None, None, None))
-        if stats != expected_stats or not 0x800 <= pointer < index < 0x1200:
-            raise ValueError('player layout family has not been verified')
+        fields = None
+        try:
+            fields, field_guards = discover_stat_fields(blob, sections, code, text[2])
+        except MetadataUnavailable:
+            if stats != expected_stats:
+                raise ValueError('player fields lack independent named metadata')
+        if fields is not None:
+            signatures.update(field_guards)
+            # The name-copy routine must independently use the same game vector,
+            # selected index and element stride as the combat stat serializer.
+            names = []
+            pattern = (rb'\x48\x8b\x89(.{4})\x48\x8b\x96(.{4})\x48\x39\xd1'
+                       rb'\x4c\x89[\x85\x8d\x95\x9d\xa5\xad\xb5\xbd].{4}\x0f\x83.{4}'
+                       rb'\x48\x8b\x86(.{4})\x48\x69\xc9(.{4})\x4c\x8d\x2c\x08'
+                       rb'\x48\x8d\x3c\x08\x48\x81\xc7(.{4})'
+                       rb'(?:\xc7\x85.{4}\x00{4}|\x45\x31\xe4)\x48\x83\xbc\x08(.{4})\xff')
+            for candidate in re.finditer(pattern, code, re.DOTALL):
+                ni, nc, np, ns, first, repeated = [struct.unpack('<I', value)[0] for value in candidate.groups()]
+                if (ni, nc, np, ns) == (index, count, pointer, stride) and first == repeated:
+                    names.append(candidate)
+            if len(names) != 1:
+                raise ValueError('player name and array serializers do not agree uniquely')
+            candidate = names[0]
+            name = struct.unpack('<I', candidate.group(5))[0]
+            if name % 8 or not 0x160 <= name <= stats - 24:
+                raise ValueError('player name exceeds the verified element bounds')
+            signatures[text[2] + candidate.start()] = candidate.group()
         # The compiler now holds the same hero in RBX instead of RDI. Match
         # complete, consistent register variants rather than wildcarding ModRM.
         gold_patterns = []
-        for base in (3, 7):
+        for base in (3, 5, 6, 7):
             gold_patterns.append(re.escape(b'\x48\x8d' + bytes([0x80 | base]) + struct.pack('<I', 0x15C)
                                            + b'\x48\x8d' + bytes([0x88 | base])) + rb'.{4}'
                                  + re.escape(b'\x48\x8d' + bytes([0x90 | base]) + struct.pack('<I', 0x150)
@@ -138,23 +169,50 @@ def _resolve(path, size, modified, created, file_id, generation):
         base = gold.group()[2] & 7
         # The reroll address in the same run serializer must match the family.
         nearby = code[gold.start():gold.start() + 0x150]
+        if fields is not None:
+            from capstone import Cs, CS_ARCH_X86, CS_MODE_64
+            resource_fields = []
+            prefix = b'\x48\x81' + bytes([0xC0 | base])
+            for instruction in Cs(CS_ARCH_X86, CS_MODE_64).disasm(nearby, text[2] + gold.start()):
+                raw = bytes(instruction.bytes)
+                if len(raw) == 7 and raw.startswith(prefix):
+                    value = struct.unpack_from('<I', raw, 3)[0]
+                    if value % 4 == 0 and stats + 64 <= value <= stride - 16:
+                        resource_fields.append(value)
+            if len(resource_fields) != 1:
+                raise ValueError('reroll serializer does not identify a unique resource field')
+            rerolls = resource_fields[0]
+            auxiliary = struct.unpack('<I', gold.group()[-4:])[0]
+            if auxiliary != rerolls + 12:
+                raise ValueError('run resource serializer fields disagree')
+            u = lambda value: struct.pack('<I', value)
+            # A second resource routine must independently address the same
+            # field through the same player array, not just repeat an immediate.
+            unique(re.escape(b'\x48\x8b\x89' + u(index) + b'\x49\x8b\x97' + u(count) + b'\x48\x39\xd1')
+                   + rb'\x0f\x83.{4}'
+                   + re.escape(b'\x49\x8b\x87' + u(pointer) + b'\x48\x69\xc9' + u(stride) + b'\x4c\x8d\x2c\x08')
+                   + rb'.{0,192}?'
+                   + re.escape(b'\x49\x8d\x85' + u(auxiliary) + b'\x49\x81\xc5' + u(rerolls)))
         rr = b'\x48\x81' + bytes([0xC0 | base]) + struct.pack('<I', rerolls)
         if nearby.count(rr) != 1:
             raise ValueError('reroll serializer changed')
         signatures[text[2] + gold.start() + nearby.index(rr)] = rr
-        if stride == 0x1870:
+        if stride == 0x1870 and fields is None:
             # Independently verify the new family's name string and unchanged
             # health/XP header before allowing Player's shared field mapping.
             unique(re.escape(b'\x48\x8d\x3c\x08\x48\x81\xc7' + struct.pack('<I', name))
                    + rb'\xc7\x85.{4}\x00{4}'
                    + re.escape(b'\x48\x83\xbc\x08' + struct.pack('<I', name) + b'\xff'))
+        if stride == 0x1870 or fields is not None:
             for modrm, offset in ((0x90 | base, 0xF8), (0x88 | base, 0x100),
                                   (0x80 | base, 0x154), (0x80 | base, 0x158)):
                 raw = b'\x48\x8d' + bytes([modrm]) + struct.pack('<I', offset)
                 if nearby.count(raw) != 1:
                     raise ValueError('player health/XP serializer changed')
                 signatures[text[2] + gold.start() + nearby.index(raw)] = raw
-        unique(re.escape(b'\x8b\x88' + struct.pack('<I', stats + 8)))
-        return Layout(digest, config, signatures, stride, pointer - 8, index, name, stats, rerolls)
+        damage = stats + (fields['damage'] if fields is not None else 8)
+        unique(re.escape(b'\x8b\x88' + struct.pack('<I', damage))
+               + (re.escape(b'\xf3\x4c\x0f\x2a\xc1') if fields is not None else b''))
+        return Layout(digest, config, signatures, stride, pointer - 8, index, name, stats, rerolls, fields)
     except (ValueError, StopIteration, struct.error, IndexError) as exc:
         raise RuntimeError(f'Unsupported Reborn build {digest[:12]}: {exc}. Memory controls are blocked.') from exc

@@ -73,7 +73,8 @@ class Player:
         if self.profile:
             for key, stat in STATS.items():
                 if 0x1670 <= stat.offset <= 0x16AC:
-                    self.stats[key] = replace(stat, offset=stat.offset + self.profile.stats - 0x1670)
+                    relative = self.profile.fields[key] if self.profile.fields is not None else stat.offset - 0x1670
+                    self.stats[key] = replace(stat, offset=self.profile.stats + relative)
             self.stats['rerolls'] = replace(STATS['rerolls'], offset=self.profile.rerolls)
         self.verify_code()
 

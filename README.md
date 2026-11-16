@@ -1,7 +1,8 @@
-# Azeroth Survivor Reborn Trainer 0.6.4
+# Azeroth Survivor Reborn Trainer 0.7.0
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
-original 0.6.3 game build and the newer `d76345ce7a4e` and `a02914e85f9b` executable layouts.
+original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
+`6c2b16d2b363` executable layouts.
 A separate trainer for **[Azeroth Survivors: Reborn](https://azreborn.com/)**.
 Reborn is a different game fork with its own executable, player layout and save
 format. This repository has independent releases and version history.
@@ -79,19 +80,24 @@ is intact; v0.6.4 fixes subsequent update restarts.
 
 ## Update compatibility
 
-Live controls discover configuration addresses, player stride, vector/index fields,
-and combat stat offsets from unique executable code patterns. Compatible updates
-within the three verified layout families can attach without adding their file hash.
-Ambiguous patterns or unknown structural families block writes. Arbitrary future
-versions cannot be guaranteed compatible.
+v0.7.0 derives the 12 combat/utility stat fields from their actual names in the
+game's Stats formatter, confirms their 32-bit integer types, and independently
+checks the player array, name, health/XP and reroll serializers. The player
+structure size is no longer restricted to a family list when that evidence is
+available. Relocated player structures and reordered named stats can be supported
+without adding a new executable hash or size entry. Verified older layouts remain
+as a fallback for stripped metadata.
 
-The `a02914e85f9b` update moved the configuration to 8-byte alignment, changed
-the hero size and stat/name offsets, and switched a serializer's hero register
-from RDI to RBX. Detection now supports both verified register variants and
-corroborates relocated configuration blocks against initialization and speed
-readers. The new player family also requires independent name and health/XP
-code anchors. Read-only live validation confirmed its configuration and solo
-hero fields. New structural families still need verification before writes.
+This improves update tolerance; it cannot guarantee arbitrary future versions.
+Compiler changes that remove metadata, rename fields, change types or alter the
+verified helper contracts can still require an updated detector. Incomplete,
+conflicting or out-of-bounds evidence blocks writes. Detection does not execute
+game code or scan by guessing plausible live numbers.
+
+The `6c2b16d2b363` layout resolves through independent named-field discovery,
+including its changed player size, name/stat/reroll offsets and game vector.
+The native configuration and all 15 supported player fields were read back
+successfully from a live solo hero in the running game.
 
 Discovery uses a bounded cache with file identity and a five-second freshness window; loaded instructions and hero
 identity are rechecked before writes. Duplicate stack references to one hero are
@@ -175,7 +181,7 @@ Originally verified executable SHA-256:
 `ab7b6332a6c47e4c29188e44932939e560b274cf06e0f212cb3ada119a3a3d35`.
 The trainer records the executable hash and checks discovered instruction signatures, process identity,
 solo allocation, character GUID/name and readback before accepting writes.
-Unknown or ambiguous layout families are blocked. Player discovery reads thread stacks without hooks.
+Unverified or ambiguous field mappings are blocked. Player discovery reads thread stacks without hooks.
 No game executable files are patched. Separate from the original game's trainer.
 
 ## Development
@@ -190,5 +196,6 @@ python build_exe.py
 ```
 
 Portable release includes the standalone executable, README and MIT license.
-Research helpers require capstone and numpy; neither is a trainer dependency.
+The trainer uses psutil and Capstone; the portable build includes both.
+Research helpers additionally require numpy.
 Unofficial fan tool. MIT license; see LICENSE.

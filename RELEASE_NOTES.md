@@ -1,15 +1,16 @@
-Self-update restart fix for Azeroth Survivor Reborn Trainer v0.6.4.
+Independent named-field discovery for Azeroth Survivor Reborn Trainer v0.7.0.
 
-- Fixes the missing python314.dll startup error after an in-place trainer update.
-- Resets the PyInstaller environment and removes inherited temporary-runtime metadata before launching the update helper.
-- The helper also explicitly requests a fresh Python runtime for the restarted executable.
-- Adds a real frozen executable replacement/restart smoke test to the release workflow, alongside 55 automated tests.
-- Preserves the previous executable, settings and save backups.
+- Supports build 6c2b16d2b363 without adding another player-size family entry.
+- Derives all 12 combat/utility stat offsets from their field names and verifies their concrete 32-bit integer formatter types.
+- Independently cross-checks the player array, name, health/XP, combat and two resource serializers before enabling memory controls.
+- Supports verified future player relocations and reordered named stats without a new hash or family entry; retains known older layouts as a metadata fallback.
+- Rejects mismatched arrays, duplicate/out-of-bounds fields, wrong formatter types, partial pointer overwrites, pointer truncation and incomplete code evidence.
+- Bounds disassembly to candidate formatter functions and caches the discovered layout; live holds only recheck loaded guards and hero identity.
+- Includes Capstone's native decoder in the portable executable, with a real packaged --help startup check in the release workflow.
+- 64 automated tests pass, including an unlisted future layout with reordered stats and a backend write/hold/restore test using that mapping.
 
-Includes v0.6.3 compatibility support for Reborn build a02914e85f9b, its relocated
-configuration and player fields, and all previous Run/Stop, Find Hero and stat controls.
-
-If an update from v0.6.0 through v0.6.3 ends with a Python DLL error, dismiss it
-and open the trainer executable normally once. Its downloaded executable is intact;
-v0.6.4 fixes subsequent update restarts. Future game layouts still require validation.
-Official game: https://azreborn.com/
+The native configuration and all 15 supported fields were verified read-only
+on a live solo hero in the running 6c2b16d2b363 game. Arbitrary future rewrites still cannot
+be guaranteed compatible; the trainer blocks writes when proof is incomplete.
+Existing Run/Stop, Find Hero with automatic Max, updater restart fixes and save
+restrictions remain in place. Official game: https://azreborn.com/

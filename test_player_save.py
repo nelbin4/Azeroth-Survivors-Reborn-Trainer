@@ -84,6 +84,25 @@ class PlayerTests(unittest.TestCase):
         self.p.tick()
         self.assertEqual(self.t.memory.writes, [])
 
+    def test_named_field_mapping_writes_and_holds_reordered_damage(self):
+        from compatibility import Layout
+        fields = {k: s.offset - 0x1670 for k, s in STATS.items() if 0x1670 <= s.offset <= 0x16AC}
+        fields['damage'], fields['crit'] = fields['crit'], fields['damage']
+        self.t.profile = Layout('proof', 0, {}, 0x1900, 0xBA8, 0xE60, NAME_OFFSET,
+                                0x1700, 0x1800, fields)
+        player = Player(self.t)
+        player.lease = dict(self.p.lease)
+        player.hold('damage', 123)
+        address = 0x20000 + 0x1700 + fields['damage']
+        self.assertEqual(struct.unpack('<I', self.t.memory.read(address, 4))[0], 123)
+        self.assertEqual(self.t.memory.read(0x20000 + STATS['damage'].offset, 4), bytes(4))
+        self.t.memory.put(address, struct.pack('<I', 45))
+        player.tick()
+        self.assertEqual(player.snapshot()['values']['damage'], 123)
+        self.assertEqual(player.snapshot()['values']['crit'], 0)
+        player.stop()
+        self.assertEqual(struct.unpack('<I', self.t.memory.read(address, 4))[0], 45)
+
 
 class SaveTests(unittest.TestCase):
     def setUp(self):
