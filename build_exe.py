@@ -11,15 +11,15 @@ NAME = 'Azeroth Survivor Reborn Trainer'
 from trainer import VERSION
 
 
-def main():
+def main(release_dir=None):
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
                '--onefile', '--noconsole', '--name', NAME,
                '--icon', str(ROOT / 'assets/trainer-icon.ico'),
                '--distpath', str(ROOT / 'dist'), '--workpath', str(ROOT / 'build'),
                '--specpath', str(ROOT / 'build'), str(ROOT / 'trainer.py')]
     subprocess.run(command, check=True)
-    release = ROOT / 'release'
-    release.mkdir(exist_ok=True)
+    release = Path(release_dir).resolve() if release_dir else ROOT / 'release'
+    release.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / 'dist' / f'{NAME}.exe', release / f'{NAME}.exe')
     shutil.copy2(ROOT / 'README.md', release / 'README.md')
     shutil.copy2(ROOT / 'LICENSE', release / 'LICENSE')

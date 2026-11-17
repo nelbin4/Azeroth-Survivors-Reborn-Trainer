@@ -26,7 +26,7 @@ from player import Player, STATS
 from compatibility import resolve, resolve_native, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.8.3'
+VERSION = '0.9.7'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 JOURNAL = ROOT / 'reborn-recovery.json'
@@ -138,6 +138,7 @@ class Trainer:
         self.process = None
         self.journal = journal
         self.changes = {}
+        self.requested_options = {}
         self.lock = None
         if session and path and not same_path(session.path, path):
             raise RuntimeError('Selected process does not match the game path.')
@@ -227,7 +228,34 @@ class Trainer:
         with getattr(self,'write_gate',threading.RLock()):
             return self._set(key,value)
 
-    def _set(self, key, value):
+    def request_option(self, key, value):
+        # Keep the validated request even if the game was between states.
+        with self.write_gate:
+            FEATURES[key].encode(float(value) * 60 if key == 'clock' else value)
+            self.requested_options[key] = value
+            self._set(key, value, rebase=True)
+
+    def verify_run_options(self, cancelled):
+        profile = resolve_native(self.path)
+        with self.write_gate:
+            if cancelled():
+                raise InterruptedError('Run options check stopped.')
+            if (profile.digest, profile.config) != (self.build, self.config_rva):
+                raise RuntimeError('Run options layout changed. Reconnect to Reborn.')
+            for rva, expected in profile.signatures.items():
+                if self.memory.read(self.base + rva, len(expected)) != expected:
+                    raise RuntimeError('Run options instructions do not match the running game.')
+            failures = []
+            for key, value in self.requested_options.items():
+                if cancelled():
+                    raise InterruptedError('Run options check stopped.')
+                try:
+                    self._set(key, value, rebase=True)
+                except (ValueError, RuntimeError, OSError) as exc:
+                    failures.append(str(exc))
+            return self.values(), failures
+
+    def _set(self, key, value, *, rebase=False):
         feature = FEATURES[key]
         if key == 'clock':
             value = float(value) * 60
@@ -237,7 +265,11 @@ class Trainer:
         if before == after:
             return
         if key in self.changes and before.hex() != self.changes[key]['after']:
-            raise RuntimeError('This option was changed outside the trainer. Restore changes and retry.')
+            if not rebase:
+                raise RuntimeError('This option was changed outside the trainer. Restore changes and retry.')
+            # An explicit UI request can reapply a reset option. Restore will
+            # return it to the most recent value the game actually supplied.
+            self.changes[key] = dict(before=before.hex(), after=before.hex())
         change = self.changes.setdefault(key, dict(before=before.hex(), after=before.hex()))
         change['after'] = after.hex()
         self.persist()  # recovery information reaches disk before any game write
@@ -255,6 +287,8 @@ class Trainer:
             return self._restore()
 
     def _restore(self):
+        if hasattr(self, 'requested_options'):
+            self.requested_options.clear()
         self.guard()
         for key, change in list(self.changes.items()):
             self.guard()
@@ -329,9 +363,9 @@ def run_gui():
     style.map('TButton', background=[('active', '#35516c')], foreground=[('disabled', '#728399')])
     style.configure('Accent.TButton', background='#56d6b0', foreground='#10251f', font=('Segoe UI', 10, 'bold'))
     style.map('Accent.TButton', background=[('active', '#7ce5c6'), ('disabled', '#263c3d')])
-    style.configure('FindHero.TButton', background='#56d6b0', foreground='#10251f',
+    style.configure('Find.TButton', background='#56d6b0', foreground='#10251f',
                     font=('Segoe UI', 16, 'bold'), padding=(24, 12))
-    style.map('FindHero.TButton', background=[('active', '#7ce5c6'), ('disabled', '#263c3d')],
+    style.map('Find.TButton', background=[('active', '#7ce5c6'), ('disabled', '#263c3d')],
               foreground=[('disabled', '#728399')])
     style.configure('TEntry', fieldbackground='#0c1826', foreground='#edf5ff', insertcolor='#edf5ff', padding=5)
     style.configure('TLabelframe', background='#14202c', bordercolor='#34475d', relief='solid')
@@ -345,48 +379,25 @@ def run_gui():
     header = ttk.Frame(body)
     header.pack(fill='x', pady=(0, 8))
     ttk.Label(header, text='AZEROTH SURVIVORS REBORN', foreground='#e3be69', font=('Segoe UI', 20, 'bold')).pack(side='left')
-    ttk.Label(header, text=f'v{VERSION}  ·  Solo controls', foreground='#a9b8c8').pack(side='left', padx=16)
+    ttk.Label(header, text=f'v{VERSION}', foreground='#a9b8c8').pack(side='left', padx=16)
     status = tk.StringVar(value='Waiting for Azeroth Survivors: Reborn.')
     detail = tk.StringVar(value='')
     ttk.Label(body, textvariable=status, font=('Segoe UI', 10), foreground='#76dfc1', wraplength=1030).pack(anchor='w', pady=(0, 6))
     # Full executable path remains in settings; avoid a second empty status row.
     tabs = ttk.Notebook(body)
     tabs.pack(fill='both', expand=True)
-    player_shell = ttk.Frame(tabs)
-    player_canvas = tk.Canvas(player_shell, background='#14232e', highlightthickness=0)
-    player_scroll = ttk.Scrollbar(player_shell, orient='vertical', command=player_canvas.yview)
-    player_canvas.configure(yscrollcommand=player_scroll.set)
-    player_scroll.pack(side='right', fill='y')
-    player_canvas.pack(side='left', fill='both', expand=True)
-    player_tab = ttk.Frame(player_canvas, padding=10)
-    player_content = player_canvas.create_window((0, 0), window=player_tab, anchor='nw')
-    player_tab.bind('<Configure>', lambda event: player_canvas.configure(scrollregion=player_canvas.bbox('all')))
-    player_canvas.bind('<Configure>', lambda event: player_canvas.itemconfigure(player_content, width=event.width))
-    def wheel(event):
-        if tabs.select() == str(player_shell):
-            player_canvas.yview_scroll(-int(event.delta / 120), 'units')
-    root.bind('<MouseWheel>', wheel)
+    stats_tab = ttk.Frame(tabs)
     native_tab = ttk.Frame(tabs, padding=10)
     progression_tab = ttk.Frame(tabs, padding=12)
-    tabs.add(player_shell, text='Live controls')
+    tabs.add(stats_tab, text='Stats')
     tabs.add(native_tab, text='Run options')
     tabs.add(progression_tab, text='Saves')
-    updates_tab = ttk.Frame(tabs, padding=24)
-    tabs.add(updates_tab, text='Updates')
     options = ttk.Frame(native_tab)
     options.pack(fill='x')
     variables = {}
     widgets = []
     trainer = None
-    player = None
-    player_widgets = []
-    player_targets = {}
-    player_holds = {}
-    player_current = {}
     pending = queue.Queue()
-    hero_pending = queue.Queue()
-    hero_searching = False
-    hero_generation = 0
     connection_generation = 0
     launcher = GameLauncher()
     next_process_scan = 0
@@ -399,10 +410,6 @@ def run_gui():
     except (OSError, ValueError):
         saved = {}
 
-    from value_hunt import add_hunt_tab
-    hunt_tab = add_hunt_tab(root, tabs, lambda: launcher.session, lambda: closing,
-                            lambda: trainer is None or not trainer.player_supported, lambda: trainer)
-
     def error(exc):
         logging.exception('Trainer operation failed')
         status.set(str(exc))
@@ -411,10 +418,12 @@ def run_gui():
         if not trainer:
             return
         try:
-            trainer.set(key, variables[key].get())
+            trainer.request_option(key, variables[key].get())
+            options_status.set(f'{FEATURES[key].label} written and read back.')
             status.set(f'{FEATURES[key].label}: {"on" if variables[key].get() else "off"}')
         except Exception as exc:
             error(exc)
+            options_status.set(str(exc))
             refresh_values()
 
     for key, feature in FEATURES.items():
@@ -438,10 +447,12 @@ def run_gui():
     def apply_number(key):
         if trainer:
             try:
-                trainer.set(key, variables[key].get())
+                trainer.request_option(key, variables[key].get())
+                options_status.set(f'{FEATURES[key].label} written and read back.')
                 status.set(f'{FEATURES[key].label} applied and read back.')
             except Exception as exc:
                 error(exc)
+                options_status.set(str(exc))
                 refresh_values()
 
     def refresh_values():
@@ -452,239 +463,30 @@ def run_gui():
             except Exception as exc:
                 error(exc)
 
+    options_status = tk.StringVar(value='Find checks Run options after player stats.')
+    ttk.Label(native_tab, textvariable=options_status, wraplength=850,
+              foreground='#76dfc1').pack(anchor='w', pady=(12, 0))
+
+    def report_options(result):
+        if result is None:
+            options_status.set('Queued after player stats…')
+            return
+        if isinstance(result, Exception):
+            options_status.set(f'Run options could not be verified: {result}')
+            return
+        _, failures = result
+        # Leave text-entry drafts alone. Checkbox and numeric edits already
+        # show the user's requested values, and failures are listed here.
+        if failures:
+            options_status.set('Some Run options could not be applied: ' + '; '.join(failures))
+        else:
+            options_status.set('Run options verified in game memory. Next-run settings apply when a new run starts.')
+
     ttk.Label(native_tab, text='Menu / next-run options take effect when the game reads them.\nThe native unlock-all flag alone is unverified; use Saves for progression upgrades.',
               wraplength=600, foreground='#a9b8c8').pack(anchor='w', pady=(14, 12))
-    hero_status = tk.StringVar(value='No solo hero connected. Start a run and use Find hero.')
-    xp_assist = tk.BooleanVar(value=False)
-    hold_all = tk.BooleanVar(value=False)
-    selected_stat = tk.StringVar(value='damage')
-    hero_row = ttk.Frame(player_tab)
-    hero_row.pack(fill='x', pady=(0, 10))
-    ttk.Label(hero_row, textvariable=hero_status, wraplength=760, font=('Segoe UI', 11)).pack(side='left')
-    workspace = ttk.Frame(player_tab)
-    workspace.pack(fill='both', expand=True)
-    workspace.columnconfigure(0, weight=2, uniform='split')
-    workspace.columnconfigure(2, weight=1, uniform='split')
-    left = ttk.Frame(workspace, padding=(0, 6, 24, 0))
-    left.grid(row=0, column=0, sticky='nsew')
-    ttk.Separator(workspace, orient='vertical').grid(row=0, column=1, sticky='ns', padx=8)
-    inspector = ttk.Frame(workspace, padding=(18, 6, 0, 0))
-    inspector.grid(row=0, column=2, sticky='nsew')
-    ttk.Label(left, text='Essential controls', font=('Segoe UI', 19, 'bold')).pack(anchor='w', pady=(6, 14))
-    for label, variable, callback in (
-        ('God mode', variables['god'], lambda: toggle('god')),
-        ('XP assistance', xp_assist, lambda: toggle_xp_assist()),
-        ('Hold max stats', hold_all, lambda: maximize_player() if hold_all.get() else pause_holds())):
-        line = ttk.Frame(left)
-        line.pack(fill='x', pady=2)
-        ttk.Label(line, text=label, font=('Segoe UI', 12, 'bold')).pack(side='left')
-        switch = ttk.Checkbutton(line, text='Enabled', variable=variable, command=callback)
-        switch.pack(side='right')
-        (widgets if label == 'God mode' else player_widgets).append(switch)
-        ttk.Separator(left).pack(fill='x', pady=3)
-    hero_actions = ttk.Frame(left)
-    hero_actions.pack(fill='x', pady=(10, 12))
+    from stats_panel import StatsPanel
+    stats_panel = StatsPanel(root, stats_tab, lambda: launcher.session, lambda: trainer, lambda: closing, report_options)
 
-    def find_hero():
-        nonlocal player, hero_searching, hero_generation
-        if not trainer or hero_searching:
-            return
-        try:
-            if player:
-                player.stop()
-            player = None
-            for held in player_holds.values():
-                held.set(False)
-            xp_assist.set(False)
-            hold_all.set(False)
-            hero_searching = True
-            hero_generation += 1
-            generation = hero_generation
-            identity = trainer.identity()
-            path = trainer.path
-            session = GameSession(trainer.process.pid, trainer.created, trainer.path)
-            hero_status.set('Finding your solo hero… You can keep using this window.')
-            def search():
-                reader = None
-                try:
-                    reader = Trainer(path, writable=False, session=session)
-                    if not same_session(identity, reader.identity()):
-                        raise RuntimeError('Game restarted during discovery. Find hero again.')
-                    candidate = Player(reader)
-                    candidate.connect()
-                    result = dict(candidate.lease)
-                except Exception as exc:
-                    result = exc
-                finally:
-                    if reader:
-                        reader.close()
-                hero_pending.put((generation, identity, result))
-            threading.Thread(target=search, daemon=True).start()
-        except Exception as exc:
-            hero_searching = False
-            hero_status.set(str(exc))
-            error(exc)
-
-    find_button = ttk.Button(header, text='Find Hero', width=18, style='FindHero.TButton', command=find_hero)
-    find_button.pack(side='right')
-    widgets.append(find_button)
-
-    def show_hero(snapshot):
-        hero_status.set(f"{snapshot['name']}  ·  Level {snapshot['level']}  ·  Health {snapshot['hp']:,} / {snapshot['maximum']:,}\nGold {snapshot['gold']:,}  ·  XP {snapshot['xp']:,} / {snapshot['next_xp']:,}  ·  Holds {len(player.frozen)} / {len(STATS)}")
-        for key, value in snapshot['values'].items():
-            player_current[key].set(display_stat(key, value))
-        hold_all.set(len(player.frozen) == len(STATS))
-
-    def apply_stat(key, hold=False):
-        if not player:
-            return
-        try:
-            if hold:
-                player.hold(key, player_targets[key].get(), player_holds[key].get())
-            else:
-                player.set_stat(key, player_targets[key].get())
-                if player_holds[key].get():
-                    player.hold(key, player_targets[key].get())
-            show_hero(player.snapshot())
-            status.set(f'{STATS[key].label} applied.')
-        except Exception as exc:
-            player_holds[key].set(False)
-            player.frozen.pop(key, None)
-            error(exc)
-
-    labels = {'damage':'Damage bonus', 'crit':'Critical strike', 'crit_damage':'Critical damage',
-              'cooldown':'Cooldown reduction', 'armor':'Damage reduction', 'speed':'Movement speed',
-              'regen':'Regeneration bonus', 'pickup':'Pickup range', 'gold_bonus':'Gold find',
-              'area':'Area of effect', 'max_health':'Maximum health', 'run_gold':'Run gold',
-              'targets':'Extra targets', 'luck':'Luck', 'rerolls':'Free rerolls'}
-    favorites = ('damage', 'crit', 'cooldown', 'armor', 'pickup', 'rerolls')
-    show_all = tk.BooleanVar(value=False)
-    stat_rows = {}
-    stat_list = ttk.Frame(left)
-    stat_list.pack(fill='x')
-    def display_stat(key, value):
-        value += 8 if key == 'crit' else 50 if key == 'crit_damage' else 0
-        return f'{value:,}' + ('' if key in ('targets', 'regen', 'max_health', 'run_gold', 'rerolls') else '%')
-
-    def select_stat(key):
-        selected_stat.set(key)
-        player_canvas.yview_moveto(0)
-        editor_title.set(labels[key])
-        editor_live.configure(textvariable=player_current[key])
-        editor_target.configure(textvariable=player_targets[key])
-        editor_hold.configure(variable=player_holds[key])
-        minimum = 1 if key == 'max_health' else 0
-        editor_range.set(f'Supported range: {minimum:,} – {STATS[key].maximum:,}' +
-                         (' · bonus above base 8%' if key == 'crit' else ' · bonus above base 50%' if key == 'crit_damage' else ''))
-        for item, row in stat_rows.items():
-            row.configure(style='Selected.TFrame' if item == key else 'TFrame')
-
-    style.configure('Selected.TFrame', background='#23443f')
-    for key, stat in STATS.items():
-        current = tk.StringVar(value='—')
-        player_current[key] = current
-        player_targets[key] = tk.StringVar(value=str(stat.default))
-        player_holds[key] = tk.BooleanVar(value=False)
-        row = ttk.Frame(stat_list, padding=(8, 1))
-        stat_rows[key] = row
-        ttk.Label(row, text=labels[key], width=23, font=('Segoe UI', 11)).pack(side='left')
-        live_label = ttk.Label(row, textvariable=current, foreground='#76dfc1', font=('Segoe UI', 11, 'bold'))
-        ttk.Button(row, text='Edit', width=5, command=lambda k=key: select_stat(k)).pack(side='right')
-        live_label.pack(side='right', padx=24)
-    def show_stats():
-        for row in stat_rows.values():
-            row.pack_forget()
-        for key in (STATS if show_all.get() else favorites):
-            stat_rows[key].pack(fill='x', pady=2)
-        all_button.configure(text='Show essential controls' if show_all.get() else 'Show all 15 controls')
-    def toggle_stats():
-        show_all.set(not show_all.get())
-        show_stats()
-    all_button = ttk.Button(left, text='Show all 15 controls', command=toggle_stats)
-    all_button.pack(anchor='w', pady=(12, 0))
-    show_stats()
-
-    editor_title = tk.StringVar(value='Damage bonus')
-    ttk.Label(inspector, textvariable=editor_title, font=('Segoe UI', 19, 'bold')).pack(anchor='w', pady=(6, 14))
-    ttk.Label(inspector, text='Current value', foreground='#a9b8c8').pack(anchor='w')
-    editor_live = ttk.Label(inspector, foreground='#76dfc1', font=('Segoe UI', 30, 'bold'))
-    editor_live.pack(anchor='w', pady=(4, 14))
-    ttk.Label(inspector, text='Target value').pack(anchor='w', pady=(0, 6))
-    editor_target = ttk.Entry(inspector, font=('Segoe UI', 19))
-    editor_target.pack(fill='x', pady=(0, 8))
-    editor_range = tk.StringVar()
-    ttk.Label(inspector, textvariable=editor_range, wraplength=310, foreground='#a9b8c8').pack(anchor='w')
-    editor_hold = ttk.Checkbutton(inspector, text='Hold this value', command=lambda: apply_stat(selected_stat.get(), True))
-    editor_hold.pack(anchor='w', pady=(16, 12))
-    editor_apply = ttk.Button(inspector, text='Apply value', style='Accent.TButton', command=lambda: apply_stat(selected_stat.get()))
-    editor_apply.pack(fill='x')
-    player_widgets.extend((editor_target, editor_hold, editor_apply))
-    select_stat('damage')
-    ttk.Label(inspector, text='Hold reapplies the target after the game recalculates it.', wraplength=300, foreground='#a9b8c8').pack(anchor='w', pady=16)
-    ttk.Separator(inspector).pack(fill='x', pady=(0, 14))
-    quick = ttk.Frame(inspector)
-    quick.pack(fill='x', pady=(12, 5))
-    gold_target = tk.StringVar(value='999999')
-
-    def player_action(action):
-        if player:
-            try:
-                if action == 'gold':
-                    player.gold(gold_target.get())
-                elif action == 'heal':
-                    player.heal()
-                else:
-                    player.ready_level()
-                show_hero(player.snapshot())
-                status.set('Player action applied and read back.')
-            except Exception as exc:
-                error(exc)
-
-    gold_entry = ttk.Entry(quick, width=10, textvariable=gold_target)
-    # Run gold is edited through the resource stat inspector.
-    gold_button = ttk.Button(quick, text='Set run gold', command=lambda: player_action('gold'))
-    # Keep the existing action available to backend calls, without duplicate UI.
-    heal_button = ttk.Button(quick, text='Heal to full', command=lambda: player_action('heal'))
-    heal_button.pack(fill='x', pady=3)
-    xp_button = ttk.Button(quick, text='One XP from level-up', command=lambda: player_action('xp'))
-    xp_button.pack(fill='x', pady=3)
-    player_widgets.extend([gold_entry, gold_button, heal_button, xp_button])
-    def maximize_player():
-        if not player or not player.lease:
-            return
-        try:
-            snapshot = player.maximize()
-            trainer.set('god', 1)
-            for key, stat in STATS.items():
-                player_targets[key].set(str(stat.maximum))
-                player_holds[key].set(True)
-            refresh_values()
-            show_hero(snapshot)
-            xp_assist.set(True)
-            status.set('15 stats/resources held; full health; XP assistance and God mode enabled.')
-        except Exception as exc:
-            for key in STATS:
-                player_holds[key].set(key in player.frozen)
-            error(exc)
-
-    max_button = ttk.Button(hero_actions, text='Max all stats', command=maximize_player, style='Accent.TButton')
-    max_button.pack(side='left', padx=(0, 8))
-    player_widgets.append(max_button)
-    def pause_holds():
-        if player:
-            player.frozen.clear()
-            player.xp_assist = False
-            for held in player_holds.values():
-                held.set(False)
-            xp_assist.set(False)
-            hold_all.set(False)
-            status.set('Holds paused. Current values remain; use Restore changes to restore eligible stats.')
-    pause_button = ttk.Button(hero_actions, text='Pause', command=pause_holds)
-    pause_button.pack(side='left')
-    player_widgets.append(pause_button)
-    def toggle_xp_assist():
-        if player:
-            player.xp_assist = xp_assist.get()
     ttk.Label(progression_tab, text='Max permanent progression', font=('Segoe UI', 14, 'bold')).pack(anchor='w', pady=(0, 12))
     ttk.Label(progression_tab, text='Creates and verifies an upgraded save from this exact game build, with an original backup.\n\n• All class gear, every rarity, upgraded\n• All catalog achievements\n• Maximum class talent experience\n• Account level 30\n\nExit the game before applying. Your character identities and other save records are kept. Individual talent allocations are not changed.',
               wraplength=590).pack(anchor='w')
@@ -700,7 +502,7 @@ def run_gui():
             return
         try:
             if resolve(path).digest != BUILD:
-                raise RuntimeError('Live controls support this layout, but permanent save upgrades require a separately verified save format. No save changed.')
+                raise RuntimeError('Stat discovery supports this layout, but permanent save upgrades require a separately verified save format. No save changed.')
             folder = ROOT / 'backups' / datetime.now().strftime('%Y%m%d-%H%M%S-%f')
             result = prepare_upgrade(path, folder)
             if find_games(path):
@@ -734,51 +536,35 @@ def run_gui():
     actions.pack(fill='x')
 
     def restore():
-        nonlocal hero_generation, hero_searching
-        hero_generation += 1
-        hero_searching = False
+        stats_panel.controller.options_pending = False
+        stats_panel.controller.policy.paused = True
+        stats_panel.controller.changed()
         if trainer:
             try:
-                if player:
-                    player.stop()
-                    xp_assist.set(False)
-                    hold_all.set(False)
-                    for held in player_holds.values():
-                        held.set(False)
                 trainer.restore()
                 refresh_values()
-                status.set('Restored native options and unchanged same-level player stats.')
+                options_status.set('Run options restored.')
+                status.set('Native options restored. Stat freezes paused; current stat values remain.')
             except Exception as exc:
                 error(exc)
 
-    restore_button = ttk.Button(hero_actions, text='Restore changes', command=restore)
-    restore_button.pack(side='left', padx=6)
+    restore_button = ttk.Button(actions, text='Restore native options', command=restore)
+    restore_button.pack(side='left', padx=(0, 6))
     widgets.append(restore_button)
 
     def disconnect_game():
-        nonlocal trainer, player, hero_generation, hero_searching, connection_generation, connecting
+        nonlocal trainer, connection_generation, connecting
         connection_generation += 1
         connecting = False
-        hero_generation += 1
-        hero_searching = False
+        stats_panel.controller.invalidate()
         if trainer:
             try:
-                if player:
-                    player.stop()
                 trainer.restore()
             except (RuntimeError, OSError, psutil.Error) as exc:
                 logging.warning('Restore before disconnect: %s', exc)
             finally:
                 trainer.close()
         trainer = None
-        player = None
-        for held in player_holds.values():
-            held.set(False)
-        for value in player_current.values():
-            value.set('—')
-        xp_assist.set(False)
-        hold_all.set(False)
-        hero_status.set('No solo hero connected. Start a run and use Find hero.')
         retry.reset()
 
     def choose_executable():
@@ -854,27 +640,16 @@ def run_gui():
     ttk.Button(actions, text='Game executable…', command=locate).pack(side='left')
     process_status = tk.StringVar(value='Checking game processes…')
     ttk.Label(actions, textvariable=process_status, foreground='#a9b8c8', wraplength=230).pack(side='left', padx=12)
-    ttk.Button(actions, text='Open folder', command=lambda: os.startfile(ROOT)).pack(side='right')
-    ttk.Label(body, text='Restore does not undo one-time actions or permanent save upgrades.',
-              foreground='#a9b8c8', wraplength=600).pack(anchor='w', pady=(12, 0))
-
     update_results = queue.Queue()
     update_busy = False
     latest_release = None
     update_status = tk.StringVar(value='Updates from GitHub')
-    automatic = tk.BooleanVar(value=saved.get('check_updates', True))
-    def save_update_preference():
-        saved['check_updates'] = automatic.get()
-        atomic_json(SETTINGS, saved)
-    ttk.Label(updates_tab, text='Trainer updates', font=('Segoe UI', 20, 'bold')).pack(anchor='w', pady=(0, 16))
-    ttk.Label(updates_tab, text=f'Installed version: {VERSION}', font=('Segoe UI', 12)).pack(anchor='w')
-    ttk.Label(updates_tab, textvariable=update_status, wraplength=850).pack(anchor='w', pady=16)
-    ttk.Label(updates_tab, text='Checks stable releases from nelbin4/Azeroth-Survivors-Reborn-Trainer. Downloads are verified with GitHub SHA-256. Installation runs only when you choose it. The trainer restores eligible live changes and restarts; the previous executable is kept beside the app.', wraplength=800, foreground='#a9b8c8').pack(anchor='w', pady=(0, 20))
     def check_updates():
         nonlocal update_busy
         if update_busy:
             return
         update_busy = True
+        update_button.state(['disabled'])
         update_status.set('Checking GitHub…')
         def work():
             try:
@@ -892,11 +667,11 @@ def run_gui():
             update_status.set('Source installation: download the standalone executable from the release page.')
             return
         if not latest_release.get('asset'):
-            update_status.set('No verified executable is available. Open the release page.')
-            return
-        if not messagebox.askyesno('Install trainer update', f"Download {latest_release['tag']} from GitHub, verify it, and restart this trainer? Settings and save backups stay in place."):
+            webbrowser.open(latest_release['page'])
+            update_status.set('This release has no verified executable for automatic installation.')
             return
         update_busy = True
+        update_button.state(['disabled'])
         update_status.set('Downloading and verifying update…')
         release = latest_release
         def work():
@@ -906,25 +681,19 @@ def run_gui():
                 result = exc
             update_results.put(('download', result))
         threading.Thread(target=work, daemon=True).start()
-    update_buttons = ttk.Frame(updates_tab)
-    update_buttons.pack(anchor='w')
-    ttk.Button(update_buttons, text='Check updates', command=check_updates).pack(side='left', padx=(0, 8))
-    install_button = ttk.Button(update_buttons, text='Install update & restart', command=install_update, style='Accent.TButton', state='disabled')
-    install_button.pack(side='left', padx=8)
-    ttk.Button(update_buttons, text='Release notes', command=lambda: webbrowser.open(latest_release['page'] if latest_release else updater.RELEASES)).pack(side='left', padx=8)
-    ttk.Checkbutton(updates_tab, text='Automatically check GitHub on startup and every 6 hours', variable=automatic, command=save_update_preference).pack(anchor='w', pady=22)
+    def update_action():
+        if latest_release and latest_release['available']:
+            install_update()
+        else:
+            check_updates()
+
     footer = ttk.Frame(body, padding=(0, 10, 0, 0))
     footer.pack(fill='x')
-    ttk.Label(footer, textvariable=update_status, foreground='#76dfc1', wraplength=370).pack(side='left')
-    ttk.Button(footer, text='Check updates', command=check_updates).pack(side='left', padx=12)
-    ttk.Button(footer, text='Release page', command=lambda: webbrowser.open(updater.RELEASES)).pack(side='left')
-    ttk.Checkbutton(footer, text='Automatic checks', variable=automatic, command=save_update_preference).pack(side='right')
-    def scheduled_update_check():
-        if automatic.get():
-            check_updates()
-        if not closing:
-            root.after(6 * 60 * 60 * 1000, scheduled_update_check)
-    root.after(1500, scheduled_update_check)
+    update_button = ttk.Button(footer, text='Check updates', command=update_action)
+    update_button.pack(side='left', padx=(0, 8))
+    ttk.Button(footer, text='Github Page', command=lambda: webbrowser.open(updater.PROJECT)).pack(side='left')
+    ttk.Label(footer, textvariable=update_status, foreground='#76dfc1', wraplength=540).pack(side='left', padx=12)
+    root.after_idle(check_updates)
 
     def connect_worker(session, generation):
         try:
@@ -937,7 +706,7 @@ def run_gui():
             pending.put((generation, exc))
 
     def poll():
-        nonlocal trainer, connecting, player, hero_searching, hero_generation, update_busy, latest_release, next_process_scan
+        nonlocal trainer, connecting, update_busy, latest_release, next_process_scan
         now = time.monotonic()
         if now >= next_process_scan:
             try:
@@ -964,7 +733,9 @@ def run_gui():
             update_busy = False
             if isinstance(result, Exception):
                 logging.warning('Update %s failed: %s', kind, result)
-                update_status.set('Update check/download failed. Use Check updates to retry.')
+                if kind == 'check':
+                    latest_release = None
+                update_status.set('Update failed. Try again.')
             elif kind == 'check':
                 latest_release = result
                 update_status.set(f"Update available: {result['tag']}" if result['available'] else f'Up to date · v{VERSION}')
@@ -975,7 +746,8 @@ def run_gui():
                     return
                 except Exception as exc:
                     update_status.set(str(exc))
-            install_button.configure(state='normal' if latest_release and latest_release.get('available') and latest_release.get('asset') and not update_busy else 'disabled')
+            update_button.configure(text='Update' if latest_release and latest_release['available'] else 'Check updates')
+            update_button.state(['!disabled'])
         except queue.Empty:
             pass
         try:
@@ -988,7 +760,7 @@ def run_gui():
                 retry.failed(time.monotonic())
                 if 'Memory controls are blocked' in str(result):
                     logging.warning('Full layout discovery: %s',result)
-                    status.set('Full layout unavailable for this build. Open Hunt values for automatic discovery and verified stat holds.')
+                    status.set('Could not verify this game build. Find is unavailable until connected.')
                 else:
                     status.set(str(result))
             else:
@@ -1003,83 +775,29 @@ def run_gui():
                     retry.reset()
                     saved['game_exe'] = trainer.path
                     atomic_json(SETTINGS, saved)
-                    status.set(f'Connected · PID {trainer.process.pid} · layout validated · {trainer.build[:12]}'
-                               if trainer.player_supported else 'Run options verified. Automatic Hunt is verifying and freezing player stats.')
-                    if not trainer.player_supported:
-                        hero_status.set('Player stats are managed by Automatic Hunt. Open Hunt values to view frozen fields.')
+                    status.set(f'Connected to PID {trainer.process.pid}. Run options ready; use Find in Stats to start Hunt.')
                     detail.set(trainer.path)
                     try:
+                        trainer.requested_options.update(RUN_OPTION_DEFAULTS)
                         run_defaults.apply(trainer)
                     except Exception as exc:
                         error(exc)
                     refresh_values()
-                    if trainer.player_supported:
-                        root.after(100, find_hero)
-        except queue.Empty:
-            pass
-        try:
-            generation, identity, result = hero_pending.get_nowait()
-            if generation == hero_generation:
-                hero_searching = False
-                if trainer and same_session(identity, trainer.identity()):
-                    if isinstance(result, Exception):
-                        hero_status.set(str(result))
-                        status.set('Native options ready. Start a solo run, then Find hero.')
-                    else:
-                        try:
-                            candidate = Player(trainer)
-                            candidate.lease = result
-                            snapshot = candidate.snapshot()
-                            player = candidate
-                            show_hero(snapshot)
-                            status.set('Solo hero verified. Live controls are ready.')
-                            maximize_player()
-                        except Exception as exc:
-                            hero_status.set(str(exc))
-                            error(exc)
         except queue.Empty:
             pass
         if trainer:
             try:
+                if not stats_panel.controller.connected_session():
+                    raise RuntimeError('Selected game process changed.')
                 trainer.guard()
             except Exception as exc:
                 trainer.close()
                 trainer = None
-                player = None
-                hero_generation += 1
-                hero_searching = False
-                for held in player_holds.values():
-                    held.set(False)
-                xp_assist.set(False)
-                hold_all.set(False)
-                hero_status.set('Disconnected. Start the game to reconnect.')
-                for value in player_current.values():
-                    value.set('—')
                 retry.failed(time.monotonic())
                 status.set(str(exc))
+        stats_panel.refresh_connection()
         for widget in widgets:
             widget.configure(state='normal' if trainer else 'disabled')
-        native_only = trainer is not None and not trainer.player_supported
-        find_button.configure(state='normal' if trainer and not hero_searching else 'disabled')
-        find_button.configure(text='View Hunt stats' if native_only else 'Finding Hero…' if hero_searching else 'Find Hero',
-                              command=(lambda: tabs.select(hunt_tab)) if native_only else find_hero)
-        if player and player.lease:
-            try:
-                show_hero(player.tick())
-            except Exception as exc:
-                player.frozen.clear()
-                player.xp_assist = False
-                xp_assist.set(False)
-                hold_all.set(False)
-                player.lease = None
-                for held in player_holds.values():
-                    held.set(False)
-                hero_status.set(str(exc))
-                for value in player_current.values():
-                    value.set('—')
-                status.set('Player controls stopped. Find hero again after starting a solo run.')
-        for widget in player_widgets:
-            widget.configure(state='normal' if player and player.lease else 'disabled')
         if not trainer and not connecting and launcher.session and retry.ready(time.monotonic()):
             connecting = True
             threading.Thread(target=connect_worker, args=(launcher.session, connection_generation), daemon=True).start()
@@ -1087,13 +805,11 @@ def run_gui():
             root.after(500, poll)
 
     def close():
-        nonlocal closing, hero_generation
+        nonlocal closing
         closing = True
-        hero_generation += 1
+        stats_panel.controller.close()
         if trainer:
             try:
-                if player:
-                    player.stop()
                 trainer.restore()
             except (RuntimeError, OSError, psutil.Error) as exc:
                 logging.warning('Restore on close: %s', exc)
@@ -1115,7 +831,7 @@ def main():
     parser.add_argument('--game', help='Full path to AzerothSurvivorsGame.exe')
     parser.add_argument('--feature', choices=FEATURES)
     parser.add_argument('--value', type=float)
-    parser.add_argument('--max-player', action='store_true', help='Compatibility flag: Find Hero now always enables Max all stats.')
+    parser.add_argument('--max-player', action='store_true', help='Compatibility flag retained; use Find and auto max/freeze in Stats.')
     args = parser.parse_args()
     logging.basicConfig(filename=ROOT / 'reborn-trainer.log', level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')

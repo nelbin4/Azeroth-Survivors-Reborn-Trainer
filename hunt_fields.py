@@ -60,10 +60,14 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
 
     candidates = []
     for base in (3, 5, 6, 7):
-        pattern = (re.escape(b'\x48\x8d' + bytes([0x80 | base]) + struct.pack('<I', 0x15C)
-                             + b'\x48\x8d' + bytes([0x88 | base])) + rb'.{4}'
-                   + re.escape(b'\x48\x8d' + bytes([0x90 | base]) + struct.pack('<I', 0x150)
-                               + b'\x4c\x8d' + bytes([0x80 | base])) + rb'.{4}')
+        # Match the argument setup, then derive the offsets from the named
+        # formatter slots. The compiler can move level and gold together.
+        pattern = (
+            re.escape(b'\x48\x8d' + bytes([0x80 | base])) + rb'.{4}'
+            + re.escape(b'\x48\x8d' + bytes([0x88 | base])) + rb'.{4}'
+            + re.escape(b'\x48\x8d' + bytes([0x90 | base])) + rb'.{4}'
+            + re.escape(b'\x4c\x8d' + bytes([0x80 | base])) + rb'.{4}'
+        )
         for match in re.finditer(pattern, code, re.DOTALL):
             if len(candidates) > 16:
                 return ()
@@ -102,8 +106,8 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
                     addresses = {}
                     guards = {start:raw[:ins.address + ins.size - start],
                               description[1]:metadata[:position + len(RESOURCE_LABELS)]}
-                    expected = {'run_gold':(5,0x15C,'I'), 'health':(7,0xF8,'Q'),
-                                'max_health':(8,0x100,'Q'), 'rerolls':(11,None,'I')}
+                    expected = {'level':(3,None,'I'), 'run_gold':(5,None,'I'), 'health':(7,None,'Q'),
+                                'max_health':(8,None,'Q'), 'rerolls':(11,None,'I')}
                     for key,(index,offset,fmt) in expected.items():
                         slot = (args[1], args[2] + index * 16)
                         field, callback = stack.get(slot), stack.get((slot[0],slot[1]+8))
@@ -117,6 +121,12 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
                         if proof:
                             fields[key] = (actual,fmt)
                             guards[proof[0]] = proof[1]
+                    # Treat health as a pair. A jump in only one argument is
+                    # insufficient evidence that the pair's layout moved.
+                    hp, maximum = addresses.get('health'), addresses.get('max_health')
+                    if hp is None or maximum != hp + 8 or hp <= 0xF0:
+                        fields.pop('health', None)
+                        fields.pop('max_health', None)
                     # This independent routine must use exactly the same array
                     # and establish the resource address from that hero.
                     if 'rerolls' not in addresses:
@@ -155,7 +165,7 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
     if len(candidates) == 1:
         fields,guards = candidates[0]
         for key,(offset,fmt) in fields.items():
-            maximum = 1000000 if key == 'health' else STATS[key].maximum
+            maximum = {'health': 1000000, 'level': 10000}[key] if key in ('health','level') else STATS[key].maximum
             result.append(FieldProof(key,offset,fmt,maximum,tuple(guards.items())))
     try:
         fields,guards = discover_stat_fields(blob,sections,code,text_rva)

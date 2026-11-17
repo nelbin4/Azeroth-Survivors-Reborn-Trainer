@@ -95,6 +95,25 @@ class Tests(unittest.TestCase):
             self.t.set('timescale', 4)
         self.assertEqual(len(self.t.memory.writes), 1)
 
+    def test_find_reapplies_requested_option_and_preserves_external_value_for_restore(self):
+        from threading import RLock
+        from compatibility import NativeLayout
+
+        self.t.write_gate = RLock()
+        self.t.requested_options = {}
+        self.t.build = trainer.BUILD
+        self.t.config_rva = trainer.CONFIG_RVA
+        self.t.request_option('timescale', 3)
+        self.t.memory.put(trainer.CONFIG_RVA + 0x1F8, struct.pack('<f', 2))
+        profile = NativeLayout(self.t.build, self.t.config_rva, dict(trainer.SIGNATURES))
+        with patch('trainer.resolve_native', return_value=profile):
+            values, failures = self.t.verify_run_options(lambda: False)
+        self.assertEqual(failures, [])
+        self.assertEqual(values['timescale'], 3)
+        self.t.restore()
+        self.assertEqual(self.t.values()['timescale'], 2)
+        self.assertEqual(self.t.requested_options, {})
+
     def test_process_reuse_blocks_write(self):
         self.t.process.create_time.return_value = 789
         with self.assertRaises(RuntimeError):

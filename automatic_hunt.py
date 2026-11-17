@@ -14,6 +14,7 @@ import time
 from code_search import stat_serializers
 from stack_probe import stacks
 from hunt_fields import discover_fields
+from hero_identity import discover_identity, read_identity
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,10 @@ class SearchPlan:
     rva: int
     guard: bytes
     fields: tuple = ()
+    name: int | None = None
+    identity_guards: tuple = ()
+    level_offset: int | None = 0x150
+    health_offset: int = 0xF8
 
 
 def file_identity(path):
@@ -59,11 +64,26 @@ def make_plan(path):
         raise ValueError('Hunt array bounds are inconsistent.')
     if before != file_identity(path):
         raise RuntimeError('Game image changed during Hunt discovery.')
+    try:
+        name, identity_guards = discover_identity(code,text[2],match.array)
+    except ValueError:
+        # Older verified families predate the string-copy metadata. Reuse only
+        # their full compatibility contract, never an inferred string offset.
+        from compatibility import resolve, Layout
+        layout=resolve(path)
+        if not isinstance(layout,Layout):raise ValueError('Player identity proof unavailable.')
+        name,identity_guards=layout.name,tuple(layout.signatures.items())
     fields = discover_fields(blob,sections,code,text[2],match.array,match.value)
     if before != file_identity(path):
         raise RuntimeError('Game image changed during field discovery.')
+    level = next((field for field in fields if field.key == 'level'), None)
+    health = next((field for field in fields if field.key == 'health'), None)
+    for field in (level, health):
+        if field:
+            identity_guards = tuple(dict((*identity_guards, *field.guards)).items())
     return SearchPlan(hashlib.sha256(blob).hexdigest(), pointer - 8, index, stride,
-                      match.value, match.rva, match.raw, fields), before
+                      match.value, match.rva, match.raw, fields, name, identity_guards, level.offset if level else None,
+                      health.offset if health else 0xF8), before
 
 
 def health_candidates(raw):
@@ -92,7 +112,7 @@ class AutomaticHunt:
         self.leases = []
         self.next_discovery = 0
 
-    def step(self, session, memory, cancelled=lambda: False, stack_source=stacks, plan_source=make_plan):
+    def step(self, session, memory, cancelled=lambda: False, stack_source=stacks, plan_source=make_plan, discover=True):
         def check():
             if cancelled():
                 raise InterruptedError('Automatic Hunt stopped.')
@@ -125,6 +145,10 @@ class AutomaticHunt:
         if memory.read(self.base + plan.rva, len(plan.guard)) != plan.guard:
             self.reset()
             raise RuntimeError('Loaded array instructions changed; Hunt will rediscover.')
+        for rva, guard in plan.identity_guards:
+            if memory.read(self.base+rva,len(guard))!=guard:
+                self.reset()
+                raise RuntimeError('Player identity proof changed; rediscovering.')
         started = time.monotonic()
         examined = 0
         found = {}
@@ -132,31 +156,41 @@ class AutomaticHunt:
 
         def probe(game, header):
             nonlocal probes
-            check()
+            if cancelled():
+                raise InterruptedError('Automatic Hunt stopped.')
             probes += 1
             cap, pointer, count = struct.unpack('<3Q', header)
-            if not (count == 1 and 1 <= cap <= 64 and pointer % 8 == 0
+            if not (1 <= count <= min(cap,4) and 1 <= cap <= 64 and pointer % 8 == 0
                     and 0x10000 <= pointer < 0x7FFFFFFFF000):
                 return
             try:
                 index = memory.read(game + plan.index, 8)
-                if index != bytes(8):
+                selected = struct.unpack('<Q',index)[0]
+                if selected >= count or (count>1 and plan.name is None):
                     return
-                raw = memory.read(pointer, plan.stride)
+                hero_pointer = pointer+selected*plan.stride
+                name = None
+                # Every participant must have a valid identity; generic vectors
+                # and stale resource buffers are not player ownership evidence.
+                if plan.name is not None:
+                    names=[read_identity(memory,pointer+i*plan.stride,plan.name) for i in range(count)]
+                    name = names[selected]
+                raw = memory.read(hero_pointer, plan.stride)
                 # These header/value bounds narrow the search; they are not a
                 # semantic layout proof and cannot enable writes.
-                guid, current, maximum = struct.unpack_from('<3Q', raw, 0xF0)
-                level = struct.unpack_from('<I', raw, 0x150)[0]
+                guid = struct.unpack_from('<Q', raw, 0xF0)[0]
+                current, maximum = struct.unpack_from('<2Q', raw, plan.health_offset)
+                level = struct.unpack_from('<I', raw, plan.level_offset)[0] if plan.level_offset is not None else None
                 slots = struct.unpack_from('<16I', raw, plan.stats)
                 if not (guid and 1 <= maximum <= 10**9 and current <= maximum
-                        and 1 <= level <= 10000 and all(v <= 1000000 for v in slots)):
+                        and (level is None or 1 <= level <= 10000) and all(v <= 1000000 for v in slots)):
                     return
                 # Discard a snapshot if ownership changes while it is being read.
                 if (memory.read(game + plan.vector, 24) != header
                         or memory.read(game + plan.index, 8) != index):
                     return
-                found[pointer] = dict(hero=pointer, game=game, raw=raw)
-            except OSError:
+                found[hero_pointer] = dict(hero=hero_pointer, game=game, raw=raw, count=count, index=selected, name=name, pointer=pointer, level=level)
+            except (OSError,ValueError,UnicodeError):
                 return
 
         # Revalidate previously located roots first, instead of rescanning all stacks.
@@ -166,7 +200,7 @@ class AutomaticHunt:
             except OSError:
                 pass
         partial = False
-        if not found or self.cursor is not None or started >= self.next_discovery:
+        if discover and (not found or self.cursor is not None or started >= self.next_discovery):
             regions = list(stack_source(process, memory))
             resume = self.cursor
             if resume and not any(tid == resume[0] and bottom <= resume[1] < top for tid, bottom, top in regions):
@@ -192,14 +226,21 @@ class AutomaticHunt:
                     except OSError:
                         raw = b''
                     examined += amount
-                    for match in re.finditer(rb'(?=([\x01-\x40]\x00{7}.{8}\x01\x00{7}))', raw, re.DOTALL):
+                    for match in re.finditer(rb'(?=([\x01-\x40]\x00{7}.{8}[\x01-\x04]\x00{7}))', raw, re.DOTALL):
                         address = position + match.start()
                         game = address - plan.vector
                         if address % 8 or game < bottom or game + plan.index + 8 > top:
                             continue
                         probe(game, match.group(1))
                         if probes >= 128 or len(found) >= 8:
+                            # Resume after this candidate, not after the entire
+                            # chunk: dense stacks can contain hundreds of Rust
+                            # vectors before the actual player array.
+                            self.cursor = (tid, address + 8)
+                            partial = True
                             break
+                    if partial:
+                        break
                     position += amount
                 if partial:
                     break
@@ -225,7 +266,8 @@ class AutomaticHunt:
                     comparisons[offset] = 'changed' if pair[0] != old['pairs'][offset][0] else 'stable'
             slots = struct.unpack_from('<16I', raw, plan.stats)
             heroes.append(dict(hero=pointer, game=item['game'], identity=identity,
-                               level=struct.unpack_from('<I',raw,0x150)[0],
+                               level=item['level'],
+                               count=item['count'], index=item['index'], name=item['name'], pointer=item['pointer'],
                                pairs=pairs, comparisons=comparisons, slots=slots))
         self.previous = {h['hero']: h for h in heroes}
         self.leases = [item['game'] for item in found.values()]
@@ -241,155 +283,8 @@ class HuntSchedule:
     def delay(self, result):
         if not isinstance(result, Exception) and (result['heroes'] or result['partial']):
             self.failures = 0
-            return .5 if result.get('freeze',{}).get('held') else 2 if result['heroes'] else 0.75
+            if result.get('freeze', {}).get('held'):
+                return .5
+            return .75 if result['partial'] else 2
         self.failures += 1
         return min(15, 2 ** min(self.failures, 4))
-
-
-def add_automatic_panel(root, parent, session_provider, needed, closing, native_provider=lambda:None):
-    import queue
-    import threading
-    import tkinter as tk
-    from tkinter import ttk
-    from hunt_freeze import HuntFreezer
-
-    frame = ttk.Frame(parent)
-    frame.pack(fill='both', expand=True)
-    ttk.Label(frame, text='Automatic background Hunt', font=('Segoe UI', 19, 'bold')).pack(anchor='w')
-    enabled = tk.BooleanVar(value=True)
-    ttk.Checkbutton(frame, text='Hunt automatically when normal detection is unavailable', variable=enabled).pack(anchor='w', pady=10)
-    freeze = tk.BooleanVar(value=True)
-    ttk.Checkbutton(frame, text='Max & freeze each verified stat as soon as it is found', variable=freeze).pack(anchor='w', pady=(0,10))
-    ttk.Label(frame, text='No values to enter. Hunt follows code-identified player arrays, searches live integer pairs and '
-              'compares snapshots while you play. Each independently verified stat is maximized and held while Hunt continues. '
-              'Unmapped numeric candidates remain read-only. Turning freeze off stops writes and leaves current values in place.',
-              wraplength=1020).pack(anchor='w')
-    status = tk.StringVar(value='Waiting for the selected game process…')
-    ttk.Label(frame, textvariable=status, wraplength=1020, foreground='#76dfc1').pack(anchor='w', pady=12)
-    output = tk.Text(frame, height=9, bg='#0c1826', fg='#e5e9ef', state='disabled')
-    output.pack(fill='both', expand=True)
-    results = queue.Queue()
-    hunt, schedule, freezer = AutomaticHunt(), HuntSchedule(), HuntFreezer()
-    busy = False
-    next_scan = 0
-    active = None
-    generation = 0
-    stop = threading.Event()
-
-    def poll():
-        nonlocal busy, next_scan, active, generation
-        if closing():
-            stop.set()
-            return
-        try:
-            session = session_provider()
-            run = bool(enabled.get() and needed() and session)
-        except Exception:
-            session, run = None, False
-        freeze_requested = freeze.get()
-        identity = (session,freeze_requested) if run else None
-        if identity != active:
-            generation += 1
-            active = identity
-            stop.set()
-            next_scan = 0
-            schedule.failures = 0
-            output.configure(state='normal')
-            output.delete('1.0', 'end')
-            output.configure(state='disabled')
-        try:
-            token, result = results.get_nowait()
-            busy = False
-            if token == generation and run:
-                next_scan = time.monotonic() + schedule.delay(result)
-                if isinstance(result, Exception):
-                    status.set(f'Automatic Hunt will retry: {result}')
-                else:
-                    heroes = result['heroes']
-                    state = ('Ambiguous player arrays; observing only.' if result['ambiguous'] else
-                             'Live values found; comparing snapshots.' if heroes else
-                             'Searching the next stack region…' if result['partial'] else
-                             'No solo player array yet; waiting for a run.')
-                    status.set(f"PID {session.pid} · build {result['build']} · {state}")
-                    lines = []
-                    frozen = result.get('freeze',{})
-                    for key,target in frozen.get('held',{}).items():
-                        shown=f'{target*100:g}%' if key=='echo' else f'{target:,}'
-                        lines.append(f'MAX & FROZEN · {key.replace("_"," ")} · {shown}')
-                    for key,message in frozen.get('errors',{}).items():
-                        lines.append(f'Waiting · {key.replace("_"," ")} · {message}')
-                    if frozen.get('message'):
-                        lines.append(frozen['message'])
-                    if frozen.get('held'):
-                        status.set(f"PID {session.pid} · {len(frozen['held'])} stats maxed & frozen · hunting remaining fields.")
-                    lines.append('')
-                    for hero in heroes:
-                        lines.append(f"Player-array candidate 0x{hero['hero']:016X}")
-                        lines.append('16 raw stat slots (names unverified): ' + ', '.join(map(str, hero['slots'])))
-                        for offset, (current, maximum) in hero['pairs'].items():
-                            lines.append(f"  Health-like pair at +0x{offset:X}: {current}/{maximum} · "
-                                         + hero['comparisons'].get(offset, 'first observation'))
-                        lines.append('')
-                    output.configure(state='normal')
-                    output.delete('1.0', 'end')
-                    output.insert('end', '\n'.join(lines))
-                    output.configure(state='disabled')
-        except queue.Empty:
-            pass
-        if not run:
-            status.set('Automatic Hunt paused: normal detection is ready.' if not needed() else
-                       'Automatic Hunt is off.' if not enabled.get() else 'Waiting for the selected game process…')
-        elif not busy and time.monotonic() >= next_scan:
-            busy = True
-            stop.clear()
-            token = generation
-            native = native_provider()
-            status.set(f'Automatic Hunt scanning in background · PID {session.pid}…')
-            def work():
-                from trainer import Memory, InstanceLock
-                memory = None
-                writable = None
-                lock = None
-                try:
-                    memory = Memory(session.pid, writable=False)
-                    cancelled = lambda: stop.is_set() or closing()
-                    result = hunt.step(session, memory, cancelled=cancelled)
-                    if freeze_requested and not cancelled():
-                        fields = freezer.observe(hunt,result)
-                        if fields:
-                            try:
-                                # A native-only Trainer in this same app already
-                                # owns the process mutex. Serialize with its
-                                # writes/close instead of competing with it.
-                                if (native is not None and native.process.pid == session.pid
-                                        and native.created == session.created and native.lock):
-                                    with native.write_gate:
-                                        native.guard()
-                                        writable = Memory(session.pid,writable=True)
-                                        result['freeze'] = freezer.apply(hunt,result,writable,fields,cancelled)
-                                else:
-                                    lock = InstanceLock(f'{session.pid}_{session.created}')
-                                    writable = Memory(session.pid,writable=True)
-                                    result['freeze'] = freezer.apply(hunt,result,writable,fields,cancelled)
-                            except Exception as exc:
-                                result['freeze'] = dict(message=f'Freeze paused: {exc}')
-                        else:
-                            result['freeze'] = dict(message='Waiting for independently verified fields and stable solo ownership.')
-                    else:
-                        freezer.reset()
-                except Exception as exc:
-                    freezer.reset()
-                    result = exc
-                finally:
-                    if writable:
-                        writable.close()
-                    if lock:
-                        lock.close()
-                    if memory:
-                        memory.close()
-                results.put((token, result))
-            threading.Thread(target=work, daemon=True).start()
-        root.after(250, poll)
-
-    root.after(750, poll)
-    return status

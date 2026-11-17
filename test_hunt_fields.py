@@ -81,3 +81,29 @@ class FieldProofTests(unittest.TestCase):
         self.assertEqual(fields(blob),())
         blob=resource_fixture();blob[0xB07:0xB0E]=b'\x49\x8b\x97'+struct.pack('<I',0xB98)
         self.assertEqual(fields(blob),())
+
+    def test_resource_proof_follows_moved_formatter_arguments(self):
+        blob = resource_fixture()
+        for opcode, original, new in (
+            (b'\x48\x8d\x87', 0x15C, 0x164),
+            (b'\x48\x8d\x97', 0x150, 0x158),
+            (b'\x48\x8d\x97', 0xF8, 0x108),
+            (b'\x48\x8d\x8f', 0x100, 0x110),
+        ):
+            at = blob.index(opcode + struct.pack('<I', original), 0x780)
+            blob[at+3:at+7] = struct.pack('<I', new)
+        # Add the level argument with the verified u32 formatter already used
+        # by the adjacent gold argument.
+        at = blob.index(b'\x48\x89\x85' + struct.pack('<I', 0x70), 0x780)
+        blob[at:at+14] = (b'\x48\x89\x95\x50\x00\x00\x00'
+                          b'\x4c\x89\x85\x58\x00\x00\x00')
+        result = {proof.key: proof.offset for proof in fields(blob)}
+        self.assertEqual(result['level'], 0x158)
+        self.assertEqual(result['health'], 0x108)
+        self.assertEqual(result['max_health'], 0x110)
+        # The fixture originally stored gold at this slot. Test its moved
+        # offset separately without disturbing the formatter call location.
+        blob = resource_fixture()
+        at = blob.index(b'\x48\x8d\x87' + struct.pack('<I', 0x15C), 0x780)
+        blob[at+3:at+7] = struct.pack('<I', 0x164)
+        self.assertEqual({proof.key: proof.offset for proof in fields(blob)}['run_gold'], 0x164)

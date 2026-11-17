@@ -109,21 +109,11 @@ class ValueHunt:
         return found
 
 
-def add_hunt_tab(root, tabs, session_provider, closing, needed=lambda: True, native_provider=lambda:None):
+def add_manual_panel(root, frame, session_provider, closing):
     import queue
     import threading
     import tkinter as tk
     from tkinter import ttk
-    from automatic_hunt import add_automatic_panel
-    shell = ttk.Frame(tabs, padding=18)
-    tabs.add(shell, text='Hunt values')
-    modes = ttk.Notebook(shell)
-    modes.pack(fill='both', expand=True)
-    auto = ttk.Frame(modes, padding=12)
-    modes.add(auto, text='Automatic')
-    add_automatic_panel(root, auto, session_provider, needed, closing, native_provider)
-    frame = ttk.Frame(modes, padding=12)
-    modes.add(frame, text='Advanced manual search')
     ttk.Label(frame, text='Hunt live values', font=('Segoe UI', 19, 'bold')).pack(anchor='w')
     ttk.Label(frame, text='Works independently of automatic layout detection. Enter a current in-game integer value, search, '
               'change that value in the game, then refine using its new value. Candidates are read-only; a numeric match '
@@ -187,6 +177,8 @@ def add_hunt_tab(root, tabs, session_provider, closing, needed=lambda: True, nat
 
     def poll():
         nonlocal hunt, busy
+        if closing():
+            return
         try:
             result = results.get_nowait()
             busy = False
@@ -213,4 +205,4 @@ def add_hunt_tab(root, tabs, session_provider, closing, needed=lambda: True, nat
         if not closing():
             root.after(200, poll)
     root.after(200, poll)
-    return shell
+    return frame

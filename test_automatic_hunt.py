@@ -140,6 +140,18 @@ class AutomaticHuntTests(unittest.TestCase):
         self.session.process=Mock(return_value=self.process)
         self.assertEqual(len(self.step()['heroes']),1)
 
+    def test_stopping_discovery_revalidates_cached_roots_without_new_stack_search(self):
+        source=Mock(return_value=[(7,0x100000,0x102000)])
+        self.hunt.step(self.session,self.memory,stack_source=source,plan_source=self.source)
+        source.reset_mock()
+        result=self.hunt.step(self.session,self.memory,stack_source=source,plan_source=self.source,discover=False)
+        self.assertEqual(len(result['heroes']),1)
+        source.assert_not_called()
+        struct.pack_into('<Q',self.stack,0x150,2)
+        result=self.hunt.step(self.session,self.memory,stack_source=source,plan_source=self.source,discover=False)
+        self.assertEqual(result['heroes'],[])
+        source.assert_not_called()
+
     def test_new_process_or_hero_identity_discards_temporal_history(self):
         self.step()
         struct.pack_into('<Q',self.hero,0xF0,92)
@@ -157,3 +169,53 @@ class AutomaticHuntTests(unittest.TestCase):
         self.assertFalse(result['ambiguous'])
         self.assertEqual(len(result['heroes']),1)
 
+
+    def test_dense_stack_probe_budget_never_skips_unexamined_candidates(self):
+        self.stack[:]=bytes(len(self.stack))
+        for offset in range(0x400,0x1400,32):
+            struct.pack_into('<3Q',self.stack,offset,1,0,1)
+        struct.pack_into('<3Q',self.stack,0x1800,4,self.pointer,1)
+        first=self.step()
+        self.assertTrue(first['partial'])
+        self.assertEqual(first['heroes'],[])
+        self.assertLess(self.hunt.cursor[1],0x101800)
+        self.assertEqual(self.step()['heroes'][0]['identity'],91)
+
+    def add_identity(self,count=1,index=0):
+        from dataclasses import replace
+        self.plan=replace(self.plan,name=0x200,identity_guards=((0x10,b'guard'),))
+        self.source.return_value=(self.plan,file_identity(self.path))
+        struct.pack_into('<3Q',self.hero,0x200,6,0x300000,6)
+        self.memory.regions[0x300000]=bytearray(b'Random')
+        struct.pack_into('<Q',self.stack,0x150,count)
+        struct.pack_into('<Q',self.stack,0x1c0,index)
+        if count>1:
+            other=bytearray(self.hero)
+            struct.pack_into('<Q',other,0xF0,92)
+            struct.pack_into('<3Q',other,0x200,7,0x300100,7)
+            self.memory.regions[0x300100]=bytearray(b'Another')
+            self.memory.regions[self.pointer]=self.hero+other
+
+    def test_identity_string_rejects_plausible_non_player_vectors(self):
+        self.add_identity()
+        self.assertEqual(self.step()['heroes'][0]['name'],'Random')
+        struct.pack_into('<3Q',self.hero,0x200,5,123,5)
+        self.assertEqual(self.step()['heroes'],[])
+
+    def test_host_selection_follows_verified_index_and_runtime_name(self):
+        self.add_identity(count=2,index=1)
+        hero=self.step()['heroes'][0]
+        self.assertEqual((hero['hero'],hero['name'],hero['count'],hero['index']),
+                         (self.pointer+0x300,'Another',2,1))
+        self.memory.regions[0x300100][:]=b'Changed'
+        self.assertEqual(self.step()['heroes'][0]['name'],'Changed')
+
+    def test_moved_level_field_does_not_reject_real_character(self):
+        from dataclasses import replace
+
+        self.add_identity()
+        self.plan = replace(self.plan, level_offset=0x158)
+        self.source.return_value = (self.plan, file_identity(self.path))
+        struct.pack_into('<I', self.hero, 0x150, 0xFFFF0000)
+        struct.pack_into('<I', self.hero, 0x158, 7)
+        self.assertEqual(self.step()['heroes'][0]['level'], 7)

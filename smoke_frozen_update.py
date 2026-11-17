@@ -9,11 +9,11 @@ import time
 from updater import restart_environment
 
 
-def main():
+def main(executable=None):
     root = Path(__file__).resolve().parent
     # Exercise imports in the real bundle, including Capstone's native DLL,
     # without opening a window or attaching to a game.
-    subprocess.run([str(root / 'release' / 'Azeroth Survivor Reborn Trainer.exe'), '--help'],
+    subprocess.run([str(executable or root / 'release' / 'Azeroth Survivor Reborn Trainer.exe'), '--help'],
                    creationflags=subprocess.CREATE_NO_WINDOW, timeout=30, check=True)
     work = root / 'build' / 'frozen-update-smoke'
     work.mkdir(parents=True, exist_ok=True)

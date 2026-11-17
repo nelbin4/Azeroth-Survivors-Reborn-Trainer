@@ -17,15 +17,17 @@ class HuntFreezer:
         self.owner = None
         self.observations = 0
         self.complete = False
+        self.last_level = None
 
     def observe(self, hunt, result):
         if result['ambiguous'] or len(result['heroes']) != 1:
             self.reset()
             return ()
         hero = result['heroes'][0]
-        owner = (hunt.session,hunt.plan.digest,hero['hero'],hero['game'],hero['identity'],hero['level'])
-        if owner != self.owner:
+        owner = (hunt.session,hunt.plan.digest,hero['hero'],hero['game'],hero['identity'],hero.get('count',1),hero.get('index',0),hero.get('name'))
+        if owner != self.owner or (self.last_level is not None and hero['level'] is not None and hero['level']<self.last_level):
             self.owner, self.observations, self.complete = owner, 0, False
+        self.last_level=hero['level']
         self.observations += 1
         self.complete = self.complete or not result['partial']
         if self.observations < 2 or not self.complete:
@@ -55,18 +57,32 @@ class HuntFreezer:
         fields = [p for p in fields if p.key != 'health' or 'max_health' in keys]
         return tuple(sorted(fields,key=lambda p:(p.key != 'max_health',p.key == 'health',p.key)))
 
-    def apply(self, hunt, result, memory, fields, cancelled=lambda:False):
+    def apply(self, hunt, result, memory, fields, cancelled=lambda:False, *, targets=None, keys=None, read_only=False, allow_multiplayer=False, authorize=lambda:True):
         from automatic_hunt import file_identity
         if not self.owner or len(result['heroes']) != 1 or result['ambiguous']:
             raise RuntimeError('Hunt ownership is not uniquely verified.')
         hero = result['heroes'][0]
-        expected = (hunt.session,hunt.plan.digest,hero['hero'],hero['game'],hero['identity'],hero['level'])
+        expected = (hunt.session,hunt.plan.digest,hero['hero'],hero['game'],hero['identity'],hero.get('count',1),hero.get('index',0),hero.get('name'))
         if expected != self.owner or not self.complete or self.observations < 2:
             raise RuntimeError('Hunt owner changed before applying fields.')
         plan = hunt.plan
+        if hero.get('count',1)>1 and plan.name is None:
+            raise RuntimeError('Multiplayer identity proof is unavailable.')
+        if hero.get("count",1)>1 and not allow_multiplayer and not read_only:
+            raise RuntimeError("Multiplayer writes require explicit Host session mode.")
         if any(proof not in plan.fields for proof in fields):
             raise RuntimeError('Field proof does not belong to the active search plan.')
-        held,errors = {},{}
+        held,errors,values,confirmed = {},{},{},{}
+        targets=targets or {}
+        # Validate the entire request before the first write. Field limits and
+        # offsets still come exclusively from the unchanged proof objects.
+        for proof in fields:
+            if proof.key not in targets:continue
+            value=targets[proof.key]
+            if (not isinstance(value,(int,float)) or not math.isfinite(value)
+                    or not (1 if proof.key=='max_health' else 0)<=value<=proof.maximum
+                    or (proof.fmt!='f' and int(value)!=value)):
+                raise ValueError(f'Invalid target for {proof.key}.')
 
         def address_of(proof):
             if not proof.indirect:
@@ -96,23 +112,35 @@ class HuntFreezer:
         def guard(proof):
             if cancelled():
                 raise InterruptedError('Hunt freeze stopped.')
+            if not read_only and not authorize():
+                raise RuntimeError('Session authority changed; stat writes stopped.')
             hunt.session.process()
             if file_identity(hunt.session.path) != hunt.stamp:
                 raise RuntimeError('Game image changed; Hunt writes stopped.')
             if memory.read(hunt.base+plan.rva,len(plan.guard)) != plan.guard:
                 raise RuntimeError('Player-array proof changed; Hunt writes stopped.')
-            for rva,raw in proof.guards:
+            for rva,raw in (*proof.guards,*plan.identity_guards):
                 if memory.read(hunt.base+rva,len(raw)) != raw:
                     raise FieldProofChanged('Field proof changed; waiting for rediscovery.')
             cap,pointer,count = struct.unpack('<3Q',memory.read(hero['game']+plan.vector,24))
             index = struct.unpack('<Q',memory.read(hero['game']+plan.index,8))[0]
             identity = struct.unpack('<Q',memory.read(hero['hero']+0xF0,8))[0]
-            level = struct.unpack('<I',memory.read(hero['hero']+0x150,4))[0]
-            current,maximum = struct.unpack('<2Q',memory.read(hero['hero']+0xF8,16))
-            if (pointer != hero['hero'] or count != 1 or not 1 <= cap <= 64 or index != 0
-                    or identity != hero['identity'] or level != hero['level']
+            level_valid = True
+            if plan.level_offset is not None:
+                level = struct.unpack('<I', memory.read(hero['hero'] + plan.level_offset, 4))[0]
+                level_valid = hero['level'] <= level <= 10000
+            current,maximum = struct.unpack('<2Q',memory.read(hero['hero']+plan.health_offset,16))
+            if (pointer != hero.get('pointer',hero['hero']) or count != hero.get('count',1)
+                    or index != hero.get('index',0) or not 1 <= count <= min(cap,4) or not 1 <= cap <= 64
+                    or pointer+index*plan.stride != hero['hero']
+                    or (count>1 and not allow_multiplayer and not read_only)
+                    or identity != hero['identity'] or not level_valid
                     or not 1 <= maximum <= 10**9 or current > maximum):
-                raise RuntimeError('Solo hero ownership changed; Hunt writes stopped.')
+                raise RuntimeError('Player ownership changed; Hunt writes stopped.')
+            if plan.name is not None:
+                from hero_identity import read_identity
+                if read_identity(memory,hero['hero'],plan.name)!=hero.get('name'):
+                    raise RuntimeError('Selected player identity changed; Hunt writes stopped.')
 
         for proof in fields:
             # Identity/code failures abort the batch; a value race only skips
@@ -124,11 +152,14 @@ class HuntFreezer:
                 continue
             try:
                 address,table_before = address_of(proof)
+                before = memory.read(address, struct.calcsize(proof.fmt))
             except (ValueError,OSError) as exc:
                 errors[proof.key]=str(exc)
                 continue
-            before = memory.read(address,struct.calcsize(proof.fmt))
-            target = proof.maximum
+            values[proof.key]=struct.unpack('<'+proof.fmt,before)[0]
+            if read_only or (keys is not None and proof.key not in keys):
+                continue
+            target = targets.get(proof.key,proof.maximum)
             maximum_before = None
             if proof.key == 'max_health':
                 # Maximize never lowers a larger live maximum or strands HP
@@ -166,5 +197,7 @@ class HuntFreezer:
                 if memory.read(address,len(after)) != after:
                     errors[proof.key] = 'Game recalculated value; retrying.'
                     continue
+            if before==after:confirmed[proof.key]=target
             held[proof.key] = target
-        return dict(held=held,errors=errors)
+            values[proof.key] = target
+        return dict(held=held,errors=errors,values=values,confirmed=confirmed)

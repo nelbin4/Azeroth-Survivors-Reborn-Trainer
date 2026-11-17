@@ -20,3 +20,5 @@ WTF/
 .updates/
 *.previous.exe
 design-qa.md
+
+reborn-role-cache.json

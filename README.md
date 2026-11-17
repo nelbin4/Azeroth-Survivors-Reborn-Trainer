@@ -1,6 +1,6 @@
-# Azeroth Survivor Reborn Trainer 0.8.3
+# Azeroth Survivor Reborn Trainer 0.9.7
 
-Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
+Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
 `6c2b16d2b363` executable layouts.
 The `d79ca7e2a239` build uses automatic Hunt holds for combat/resources and an
@@ -14,9 +14,11 @@ Derived from the process validation and recovery approach of
 Download the portable zip from [Reborn Trainer Releases](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases),
 extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. If the game is
 closed, click **Run Azeroth Survivors Reborn**. Start a solo run in the game,
-then click **Find Hero**. After verifying your solo hero, the trainer automatically
-applies **Max all stats**, God mode and XP assistance. Keep the trainer open.
-Player controls require a verified solo character.
+then open **Stats** and click **Find**. This starts automatic background Hunt.
+**Auto max & freeze newly found stats** is enabled by default. Verified fields
+are maximized on their first usable read while discovery continues. No stat search or stat
+write starts automatically before Find. Native run-option defaults still apply
+when the game connection is verified. Keep the trainer open.
 
 ## Launch and process controls
 
@@ -38,37 +40,44 @@ when memory-layout detection fails; no game compatibility checks are bypassed.
 Run becomes available again after the process exits. Closing the trainer alone
 leaves the game running.
 
-## Interface and recovery
+## Stats interface and recovery
 
-The Compact Companion layout places essential controls and six favorite stats
-beside a selected-stat editor. Click Edit to view a stat's live value, supported
-range, target and Hold control. Show all 15 controls expands the complete list;
-selecting a stat brings its editor into view. Max, Pause and Restore remain
-above the favorites. Mouse-wheel scrolling works in Live controls; the window
-can be resized. Run options and Saves retain the existing native and save tools.
-Pause holds stops repeated stat/XP writes and leaves current values in place.
-Restore changes restores eligible values and cancels pending hero searches.
+**Stats** shows current values, targets, freeze settings and status in one
+table. Filter by category and select a row to edit it in the side panel.
+Click a verified row's Freeze cell or press Space on that row to toggle its hold.
 
-Hero discovery runs on a background read-only connection. The interface remains
-responsive while searching, and results from stale process identities or cancelled
-searches are discarded. Reconnecting uses bounded retry delays instead of
-repeated rapid attach attempts. A disconnect clears stale readings and hold flags.
+**Find** becomes available after the trainer connects to the selected game process. It starts background discovery. The progress bar and elapsed timer show when Hunt is working. A first search typically takes 1–3 minutes. **Stop search** stops finding new
+allocations while verified existing holds can continue. **Pause freezes** stops
+stat and XP writes while discovery continues. Resume keeps configured targets
+and freeze preferences. Pending, ambiguous or stale fields are never written.
+
+Set a target and click **Apply**. Check **Keep frozen** to keep applying it,
+or clear it to apply once. **Use maximum** fills the target field.
+**Max & freeze all** sets every target to its trainer limit and starts Find if
+no fields are verified. Crit targets are displayed as total chance/damage; the backend
+converts them to bonuses above the game's native base. Echo uses percentage
+units in the editor and its native float representation in memory. Current
+health follows the live verified maximum. Maximum-health targets are minimums;
+larger native bonuses are preserved.
+
+God mode is in **Run options**. Find checks the live Run options configuration after finding player stats and retries the requested settings if the game reset them. Run options reports readback or errors. Next-run settings are consumed by the game when the next run starts. **Advanced…** contains manual searches,
+detection details, and XP controls for verified solo layouts.
+
+Disabling a per-stat hold leaves its current value in place. **Restore native
+options** pauses stat freezes and restores eligible configuration changes; it
+does not roll back Hunt stat values. Closing the trainer leaves applied stat
+values in place and restores eligible native option changes. Game, build,
+owner and level changes invalidate stale results before any further write.
 
 ## Trainer updates
 
-The footer and Updates tab check this repository's latest stable GitHub release.
-Automatic checks run shortly after startup and every six hours; disable them
-with Automatic checks. Check updates and Release page are always available.
-Checks run in the background and do not interrupt hero discovery.
+The trainer checks for a stable GitHub release once on startup. Use **Check updates**
+in the footer to check again. When a newer release is available, the button
+becomes **Update**. Clicking it downloads and verifies the Windows executable,
+backs up the current executable, and restarts the trainer. **Github Page**
+opens the project repository. Source runs and releases without a verified
+executable open the release page for manual installation.
 
-When a newer executable is available, click Install update & restart and confirm.
-The trainer validates the repository URL, declared size, GitHub SHA-256 digest
-and Windows x64 executable header before staging it. It restores eligible game
-changes, exits, replaces its executable and restarts. Settings and save backups
-stay in the same folder. Installation is never automatic. Source installations
-open the release page instead of replacing Python files.
-
-The previous executable is retained as `Azeroth Survivor Reborn Trainer.previous.exe`.
 If an update cannot start, close the trainer and copy that backup over the main
 executable. The trainer folder must be writable. Network failures leave the
 installed version usable; GitHub API rate limits can delay checks. No GitHub
@@ -84,11 +93,10 @@ is intact; v0.6.4 fixes subsequent update restarts.
 
 ### Hunt values on an unsupported build
 
-**Automatic background Hunt** is enabled by default. When normal detection is
-unavailable, it starts with the selected game process, without values to enter
-or buttons to press. It keeps running when another tab is selected, without
-switching tabs or taking focus from the game. It pauses when normal detection
-is ready, and discards stale results after process changes.
+**Find** starts automatic background Hunt for the selected game process.
+No numeric values need to be entered. It keeps running when another tab is selected, without
+switching tabs or taking focus from the game. It uses the same Stats interface on supported older layouts and newer
+independently proven layouts, and discards stale results after process changes.
 
 **Max & freeze each verified stat as soon as it is found** is enabled by default.
 After a complete initial search and two stable observations of one solo owner,
@@ -112,7 +120,7 @@ is present, Hunt maxes its chance to 100% and revalidates the table header, key
 and bucket before writes. It keeps hunting when the entry is absent; it does
 not insert effects, allocate game memory or change equipment. Table movement or
 a missing effect skips Echo while other stats remain held. Numeric matches
-alone never enable writes. The panel lists held fields separately from candidates.
+alone never enable writes. The category rows distinguish active freezes from pending or unverified fields.
 
 **Run options** are discovered independently of the player layout. Verified
 configuration anchors enable clock speed, starting minute, boss timing and the
@@ -137,7 +145,7 @@ Missing heroes/errors retry with delays up
 to 15 seconds. Unchanged failed code searches are cached until the image changes.
 Cancellation and process identity are checked throughout the search.
 
-The optional **Advanced manual search** subtab retains exact-value searching.
+The optional **Advanced… → Manual value search** view retains exact-value searching.
 Select **64-bit integer** for known integer health, enter its current displayed
 value, and click **New hunt**. When it changes, enter the new value and refine.
 Use **32-bit integer** for known integer bonuses or run gold. Types can change
@@ -157,9 +165,9 @@ ownership, hero identity and level before writes. A field-specific proof failure
 skips that field; ownership changes stop the batch. A per-process writer lock
 prevents competing trainers from writing at once. No addresses are saved across
 sessions and Hunt does not edit saves. On `d79ca7e2a239`, the old full Player/name
-contract is still unavailable, so live stat holds use Hunt. **View Hunt stats**
-opens the active hold list; Run options remain usable. Legacy player controls
-are never enabled with guessed name or field offsets.
+contract is still unavailable, so Stats uses independent Hunt field proofs.
+Run options remain usable. Verified older layouts feed the same Stats controls;
+no old player-name contract is guessed.
 
 ### Automatic player mapping
 
@@ -200,8 +208,8 @@ save format/build. A compatible live layout does not establish save compatibilit
 
 ## Player controls
 
-**Max all stats** holds all 15 supported stats and resources at the trainer's limits,
-heals to full, and enables the native invulnerability flag. These are bounded
+**Max & freeze all** holds supported stats and resources at the trainer's limits.
+Current-health holds heal to full; God mode is controlled separately. These are bounded
 trainer limits; they are not a claim that every value has a native maximum.
 
 | Stat | Trainer limit |
@@ -222,14 +230,15 @@ trainer limits; they are not a claim that every value has a native maximum.
 | Run gold | 99,999,999 |
 | Free rerolls | 9,999 |
 
-Each stat has Apply value and Hold this value in its editor. Hold reapplies after game recalculations.
-One-time controls heal, set run gold (up to 99,999,999), or place XP one point
-below the next level. All 15 fields, healing, God mode and XP assistance were read back in live solo
-play; the visual and gameplay effects of each remaining field need broader testing.
-Max also enables XP assistance: XP stays one pickup below the next level, letting native pickups perform level-ups and card rewards. Time and kills are run counters.
-Click Find Hero again after a new run to verify and max the new character.
-Pause stops repeated writes; they resume only when you enable holds, use Max all
-stats, or find a hero again. Leave the trainer open to keep Hold active.
+Each stat has an editor and a per-stat Freeze setting. Holds reapply
+after native recalculations. Current health can be applied once to heal to full.
+XP assistance and One XP from level-up retain the independently verified full
+player/name contract and are unavailable when that contract is missing.
+
+After Find, Hunt follows new runs and validates their fresh solo ownership before
+resuming eligible holds. Stop search does not locate a new allocation until Find
+is used again. Pause freezes leaves configured targets intact and resumes only
+through Resume freezes or Max & freeze all. Keep the trainer open for active holds.
 
 ## Native options
 
@@ -296,3 +305,16 @@ Portable release includes the standalone executable, README and MIT license.
 The trainer uses psutil and Capstone; the portable build includes both.
 Research helpers additionally require numpy.
 Unofficial fan tool. MIT license; see LICENSE.
+
+
+### Selected-player validation and host sessions
+
+Hunt verifies the selected character's live identity string using corroborating code proofs. Names are read dynamically; no test character name is hardcoded. The scan resumes at the exact candidate after its probe budget is exhausted, so dense stacks do not hide the active player array.
+
+**Host session (automatic)** follows the game's live lobby role. It checks itself for a verified host and clears itself for a guest or a solo/no-lobby session. Guests and unknown roles cannot authorize stat writes, including a guest currently alone in a player array. There is no manual host override. Only the character selected by the verified game index is eligible; other party members are left alone. XP assistance remains solo-only.
+
+Role discovery runs read-only in the background when the game is detected. A cold scan or a UI runtime reload may take about a minute; the UI stays responsive and stat writes wait for verification. A process-bound address cache is always revalidated against the live Lua main thread, global environment and current lobby table. Runtime, PID, global-table and lobby changes invalidate old ownership. Role is checked again before every stat write. Find still starts stat discovery and automatic max/freeze. Native Run options use their independent detector and remain available while role detection runs.
+
+The reader validates the game's Lua 5.1 runtime object layout. An unsupported runtime stays unknown/read-only; future game versions are not guaranteed compatible.
+
+**Applying; verifying** means the write was read back immediately. **Frozen** requires a subsequent observation at the requested value, with the same player and code proofs. A recalculated value returns to applying status.

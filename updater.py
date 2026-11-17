@@ -10,7 +10,8 @@ import urllib.request
 from urllib.parse import urlparse
 
 REPOSITORY = 'nelbin4/Azeroth-Survivors-Reborn-Trainer'
-RELEASES = f'https://github.com/{REPOSITORY}/releases'
+PROJECT = f'https://github.com/{REPOSITORY}'
+RELEASES = f'{PROJECT}/releases'
 API = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
 MAX_DOWNLOAD = 64 * 1024 * 1024
 

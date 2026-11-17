@@ -93,6 +93,32 @@ class HuntFreezeTests(unittest.TestCase):
         self.assertEqual(len(self.writes),2)
         self.assertEqual(HuntSchedule().delay(dict(heroes=[{}],partial=True,freeze=dict(held={'run_gold':99999999}))),.5)
 
+    def test_custom_target_does_not_mutate_the_independent_proof(self):
+        self.prepare(('run_gold','rerolls'))
+        outcome=self.freezer.apply(self.hunt,self.result,self.memory,self.fields,
+                                  targets={'run_gold':123456},keys={'run_gold'})
+        self.assertEqual(outcome['held'],{'run_gold':123456})
+        self.assertEqual(struct.unpack_from('<I',self.hero,0x15C)[0],123456)
+        self.assertEqual(struct.unpack_from('<I',self.hero,0x2E0)[0],0)
+        self.assertEqual(next(f for f in self.fields if f.key=='run_gold').maximum,99999999)
+
+    def test_read_only_snapshot_and_invalid_custom_targets_never_write(self):
+        self.prepare()
+        outcome=self.freezer.apply(self.hunt,self.result,self.memory,self.fields,read_only=True)
+        self.assertEqual(outcome['values']['health'],169)
+        self.assertEqual(outcome['held'],{})
+        self.assertEqual(self.writes,[])
+        for target in (-1,100000000,.5,float('nan')):
+            with self.assertRaises(ValueError):
+                self.freezer.apply(self.hunt,self.result,self.memory,self.fields,targets={'run_gold':target})
+        self.assertEqual(self.writes,[])
+
+    def test_healing_without_holding_maximum_uses_the_verified_live_maximum(self):
+        self.prepare()
+        outcome=self.freezer.apply(self.hunt,self.result,self.memory,self.fields,keys={'health'})
+        self.assertEqual(outcome['held'],{'health':178})
+        self.assertEqual(struct.unpack_from('<2Q',self.hero,0xF8),(178,178))
+
     def test_maximum_is_applied_before_healing_and_other_fields_continue(self):
         self.prepare()
         result=self.apply()
@@ -165,3 +191,50 @@ class HuntFreezeTests(unittest.TestCase):
         self.assertEqual(self.freezer.observe(self.hunt,self.result),())
         with self.assertRaisesRegex(RuntimeError,'active search plan'):self.apply()
         self.assertEqual(self.writes,[])
+
+    def test_frozen_confirmation_requires_a_later_unchanged_read(self):
+        self.prepare(('run_gold',))
+        first=self.apply()
+        self.assertEqual(first['confirmed'],{})
+        self.assertEqual(self.apply()['confirmed'],{'run_gold':99999999})
+        struct.pack_into('<I',self.hero,0x15C,5)
+        self.assertEqual(self.apply()['confirmed'],{})
+
+    def test_host_permission_and_identity_guard_are_required_for_multiplayer(self):
+        self.prepare(('run_gold',))
+        self.hunt.plan=replace(self.hunt.plan,name=0x200,identity_guards=((0x10,b'guard'),))
+        struct.pack_into('<3Q',self.hero,0x200,4,0x300000,4)
+        self.memory.regions[0x300000]=bytearray(b'Test')
+        hero=self.result['heroes'][0]
+        hero.update(count=2,index=0,pointer=self.pointer,name='Test')
+        struct.pack_into('<Q',self.stack,0x150,2)
+        self.freezer.observe(self.hunt,self.result)
+        self.fields=self.freezer.observe(self.hunt,self.result)
+        with self.assertRaisesRegex(RuntimeError,'Host session'):self.apply()
+        self.assertEqual(self.writes,[])
+        self.assertEqual(self.apply(allow_multiplayer=True)['held'],{'run_gold':99999999})
+        self.memory.regions[0x300000][:]=b'Gone'
+        with self.assertRaisesRegex(RuntimeError,'identity changed'):self.apply(allow_multiplayer=True)
+
+    def test_session_authority_is_rechecked_before_every_write(self):
+        self.prepare(('run_gold',))
+        checks=iter((True,False))
+        with self.assertRaisesRegex(RuntimeError,'authority changed'):
+            self.apply(authorize=lambda:next(checks))
+        self.assertEqual(self.writes,[])
+
+    def test_normal_level_gains_do_not_invalidate_the_same_player(self):
+        self.prepare(('run_gold',))
+        struct.pack_into('<I',self.hero,0x150,4)
+        self.assertEqual(self.apply()['held'],{'run_gold':99999999})
+        self.result['heroes'][0]['level']=4
+        self.assertTrue(self.freezer.observe(self.hunt,self.result))
+
+    def test_level_reset_during_a_batch_stops_writes_and_requires_reobservation(self):
+        self.prepare(('run_gold',))
+        struct.pack_into('<I',self.hero,0x150,1)
+        with self.assertRaisesRegex(RuntimeError,'ownership changed'):self.apply()
+        self.assertEqual(self.writes,[])
+        self.result['heroes'][0]['level']=1
+        self.assertEqual(self.freezer.observe(self.hunt,self.result),())
+        self.assertTrue(self.freezer.observe(self.hunt,self.result))
