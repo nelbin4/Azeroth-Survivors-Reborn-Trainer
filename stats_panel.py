@@ -280,7 +280,7 @@ class StatsPanel:
                 target = '≥ ' + target
             state = 'Searching' if policy.searching else 'Not found'
             if read_only and known:
-                state = 'Read-only'
+                state = 'Checking role' if controller.role == 'unknown' else 'Read-only'
             elif policy.paused and (frozen or key in policy.pending):
                 state = 'Paused'
             elif key in freeze.get('errors', {}):

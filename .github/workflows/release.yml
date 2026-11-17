@@ -1,6 +1,7 @@
 name: Release Reborn Trainer
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -10,22 +11,53 @@ on:
         type: string
 permissions:
   contents: write
+concurrency:
+  group: reborn-publish
+  cancel-in-progress: false
 jobs:
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
-    env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+      - name: Select release version
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+        run: |
+          $source = Get-Content -Raw -LiteralPath trainer.py
+          $version = [regex]::Match($source, '(?m)^VERSION = ''(\d+\.\d+\.\d+)''\s*$')
+          if (-not $version.Success) { throw 'Expected a stable VERSION in trainer.py.' }
+          $tag = 'v' + $version.Groups[1].Value
+          if ($env:REQUESTED_TAG -and $env:REQUESTED_TAG -ne $tag) { throw 'Tag and trainer version differ.' }
+
+          $releases = gh release list --exclude-drafts --exclude-pre-releases --limit 100 --json tagName
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read published releases.' }
+          $stable = @($releases | ConvertFrom-Json | ForEach-Object { $_.tagName } |
+            Where-Object { $_ -match '^v\d+\.\d+\.\d+$' })
+          $current = [version]$version.Groups[1].Value
+          $newer = -not ($stable | Where-Object { [version]$_.Substring(1) -ge $current })
+          if ($tag -in $stable -or (-not $env:REQUESTED_TAG -and -not $newer)) {
+            Write-Host "Skipping $tag because a matching or newer stable release exists."
+            exit 0
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "latest=$($newer.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-python@v5
+        if: steps.release.outputs.tag != ''
         with:
           python-version: '3.14'
           cache: pip
       - run: pip install -r requirements.txt pyinstaller
+        if: steps.release.outputs.tag != ''
       - name: Verify tag matches trainer version
+        if: steps.release.outputs.tag != ''
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         shell: python
         run: |
           import os
@@ -34,13 +66,27 @@ jobs:
           from trainer import VERSION
           assert os.environ['RELEASE_TAG'] == f'v{VERSION}', 'Tag and trainer version differ'
       - run: python -m unittest discover -s . -p "test_*.py"
+        if: steps.release.outputs.tag != ''
       - run: python build_exe.py
+        if: steps.release.outputs.tag != ''
       - name: Verify frozen self-update restart
+        if: steps.release.outputs.tag != ''
         run: python smoke_frozen_update.py
       - name: Publish Reborn release
+        if: steps.release.outputs.tag != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_LATEST: ${{ steps.release.outputs.latest }}
         run: |
           $archive = Get-ChildItem -LiteralPath release -Filter 'AzerothSurvivorRebornTrainer-*.zip' | Select-Object -First 1
-          gh release create "$env:RELEASE_TAG" "release/Azeroth Survivor Reborn Trainer.exe" $archive.FullName "release/SHA256SUMS.txt" --title "Azeroth Survivor Reborn Trainer $env:RELEASE_TAG" --notes-file RELEASE_NOTES.md
+          $ref = "refs/tags/$env:RELEASE_TAG"
+          $tagRefs = git ls-remote --tags origin "$ref" "$ref^{}"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the release tag.' }
+          if ($tagRefs) {
+            $tagCommit = (($tagRefs | Select-Object -Last 1) -split '\s+')[0]
+            if ($tagCommit -ne $env:RELEASE_SHA) { throw 'Existing tag points to another commit.' }
+          }
+          gh release create "$env:RELEASE_TAG" "release/Azeroth Survivor Reborn Trainer.exe" $archive.FullName "release/SHA256SUMS.txt" --target "$env:RELEASE_SHA" "--latest=$env:RELEASE_LATEST" --title "Azeroth Survivor Reborn Trainer $env:RELEASE_TAG" --notes-file RELEASE_NOTES.md

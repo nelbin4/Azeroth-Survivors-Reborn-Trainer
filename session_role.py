@@ -76,13 +76,25 @@ def rooted_globals(memory,state):
     return env
 
 
+# Scan for the Lua thread tag, its global-state pointer, and the table-tagged
+# global environment. A match is only a candidate until the live root and
+# lobby table checks pass.
+LUA_THREAD_PATTERN = re.compile(
+    rb'\x08.{23}.{5}[\x00-\x7f]\x00\x00.{80}.{5}[\x00-\x7f]\x00\x00\x05\x00\x00\x00',
+    re.DOTALL,
+)
+
+
 class SessionRole:
     def __init__(self,budget=128*1024*1024,seconds=.15):
         self.budget,self.seconds=budget,seconds
         self.reset()
 
     def reset(self):
-        self.session=None;self.phase=0;self.cursor=0;self.keys=set();self.globals=set();self.states=set()
+        self.session = None
+        self.cursor = 0
+        self.candidates = {}
+        self.regions = None
         self.state=None;self.env=None;self.slot=None;self.header=None;self.role='unknown';self.retry=0
 
     def read(self,memory):
@@ -118,53 +130,70 @@ class SessionRole:
             self.reset();self.session=session
         session.process()
         if self.state is not None:
-            try:return self.read(memory)
-            except (ValueError,OSError,UnicodeError):
-                self.reset();self.session=session
-        if time.monotonic()<self.retry:return 'unknown'
-        started=time.monotonic();examined=0
-        # Pass 1: interned _G string; pass 2: its self-referencing global table;
-        # pass 3: the unique live main thread that owns that environment.
-        if self.phase==0:needles=[b'_G\0']
-        elif self.phase==1:needles=[struct.pack('<QI',p,4) for p in self.keys]
-        else:needles=[struct.pack('<QI',p,5) for p in self.globals]
-        if not needles and self.phase:
-            self.reset();self.session=session;self.retry=time.monotonic()+10;return 'unknown'
-        pattern=re.compile(b'|'.join(re.escape(n) for n in needles))
-        for base,size in (private_regions(memory) if regions is None else regions):
-            pos=max(base,self.cursor)
-            while pos<base+size:
-                if cancelled():raise InterruptedError('Role detection stopped.')
-                if examined>=self.budget or time.monotonic()-started>=self.seconds:
-                    self.cursor=pos;return 'unknown'
-                amount=min(1024*1024,base+size-pos,self.budget-examined)
-                try:raw=memory.read(pos,min(amount+32,base+size-pos))
-                except OSError:raw=b''
-                for match in pattern.finditer(raw):
-                    address=pos+match.start()
+            try:
+                return self.read(memory)
+            except (ValueError, OSError, UnicodeError):
+                # Lua can replace the lobby table while the role is being
+                # read. Keep the rooted runtime through that short race.
+                try:
+                    if rooted_globals(memory, self.state) == self.env:
+                        self.slot = None
+                        return 'unknown'
+                except (ValueError, OSError):
+                    pass
+                self.reset()
+                self.session = session
+        if time.monotonic() < self.retry:
+            return 'unknown'
+        if regions is None:
+            if self.regions is None:
+                self.regions = tuple(private_regions(memory))
+            regions = self.regions
+
+        started = time.monotonic()
+        examined = 0
+        for base, size in regions:
+            pos = max(base, self.cursor)
+            while pos < base + size:
+                if cancelled():
+                    raise InterruptedError('Role detection stopped.')
+                if examined >= self.budget or time.monotonic() - started >= self.seconds:
+                    self.cursor = pos
+                    return 'unknown'
+                amount = min(1024 * 1024, base + size - pos, self.budget - examined)
+                try:
+                    raw = memory.read(pos, min(amount + 124, base + size - pos))
+                except OSError:
+                    raw = b''
+                offset = 0
+                while match := LUA_THREAD_PATTERN.search(raw, offset):
+                    offset = match.start() + 1
+                    if match.start() >= amount:
+                        break
+                    state = pos + match.start() - 8
+                    if not pointer(state):
+                        continue
                     try:
-                        if self.phase==0:
-                            key=address-24
-                            if string(memory,key)==b'_G':self.keys.add(key)
-                        elif self.phase==1:
-                            node=address-16
-                            env,tag=struct.unpack('<QI',memory.read(node,12))
-                            if tag!=5:continue
-                            _,nodes,count=table(memory,env)
-                            if not nodes<=node<nodes+count*40 or (node-nodes)%40:continue
-                            lookup(memory,env,b'AZS_RUN_LOBBY');self.globals.add(env)
-                        else:
-                            state=address-120
-                            if rooted_globals(memory,state) in self.globals:self.states.add(state)
-                    except (ValueError,OSError,UnicodeError,struct.error):continue
-                examined+=amount;pos+=amount
-        self.cursor=0;self.phase+=1
-        if self.phase==3:
-            if len(self.states)==1:
-                self.state=next(iter(self.states));self.env=rooted_globals(memory,self.state)
-                try:return self.read(memory)
-                except (ValueError,OSError,UnicodeError):pass
-            self.reset();self.session=session;self.retry=time.monotonic()+10
+                        env = rooted_globals(memory, state)
+                        lookup(memory, env, b'AZS_RUN_LOBBY')
+                        self.candidates[state] = env
+                    except (ValueError, OSError):
+                        continue
+                examined += amount
+                pos += amount
+
+        if len(self.candidates) == 1:
+            self.state, self.env = next(iter(self.candidates.items()))
+            self.candidates.clear()
+            self.regions = None
+            try:
+                return self.read(memory)
+            except (ValueError, OSError, UnicodeError):
+                return 'unknown'
+
+        self.reset()
+        self.session = session
+        self.retry = time.monotonic() + 10
         return 'unknown'
 
 

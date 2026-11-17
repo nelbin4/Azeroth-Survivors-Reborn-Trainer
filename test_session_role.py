@@ -44,8 +44,7 @@ class RoleTests(unittest.TestCase):
         self.pack(address,'QI',value,tag);self.pack(address+16,'QI',key,4)
 
     def discover(self):
-        for _ in range(3):role=self.reader.step(self.session,self.memory,regions=[(0x10000,len(self.raw))])
-        return role
+        return self.reader.step(self.session, self.memory, regions=[(0x10000, len(self.raw))])
 
     def test_finds_only_a_main_thread_rooted_live_role(self):
         self.assertEqual(self.discover(),'host')
@@ -80,3 +79,20 @@ class RoleTests(unittest.TestCase):
         self.reader.budget=4096
         self.assertEqual(self.reader.step(self.session,self.memory,regions=[(0x10000,len(self.raw))]),'unknown')
         self.assertEqual(self.reader.cursor,0x11000)
+
+    def test_ambiguous_rooted_runtimes_remain_unknown(self):
+        state, owner = 0x12100, 0x13200
+        self.raw[state-0x10000+8] = 8
+        self.pack(state+32, 'Q', owner)
+        self.pack(state+120, 'QI', self.env, 5)
+        self.pack(owner+176, 'Q', state)
+        self.assertEqual(self.discover(), 'unknown')
+        self.assertIsNone(self.reader.state)
+
+    def test_transient_role_read_does_not_discard_root(self):
+        self.assertEqual(self.discover(), 'host')
+        self.node(0x16028, self.key_g, 4, self.key_role)
+        self.assertEqual(self.discover(), 'unknown')
+        self.assertEqual(self.reader.state, self.state)
+        self.node(0x16028, self.host, 4, self.key_role)
+        self.assertEqual(self.discover(), 'host')

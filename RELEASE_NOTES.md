@@ -1,3 +1,8 @@
+Azeroth Survivor Reborn Trainer v0.9.8
+
+- Verify the live lobby role in one memory pass so Auto max can apply verified stats sooner. Retry transient lobby changes without rescanning while the Lua runtime is still valid.
+- Show Checking role for discovered stats that are queued for session verification.
+
 Azeroth Survivor Reborn Trainer v0.9.7
 
 - Auto max and freeze applies each stat on its first verified read in the search worker. Unavailable fields continue searching independently.

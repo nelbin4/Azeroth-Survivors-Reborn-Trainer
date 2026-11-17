@@ -251,7 +251,7 @@ class StatsController:
                     who = f" · {selected.get('name') or 'player'}" if selected else ''
                     if selected.get('level') is not None:
                         who += f" (level {selected['level']})"
-                    if result.get('host_required'):self.message='Guest session: stat writes disabled.' if result.get('role')=='guest' else 'Detecting session authority; stats remain read-only.'
+                    if result.get('host_required'):self.message='Guest session: stat writes disabled.' if result.get('role')=='guest' else 'Waiting to verify a solo or host session.'
                     elif self.policy.paused:self.message=f'Freezes paused · {len(self.policy.verified)} verified stats.'
                     elif held:self.message=f'{held} stats frozen{who} · '+('Hunt continues in the background.' if self.policy.searching else 'Monitoring existing fields.')
                     elif successful:self.message=f'{len(successful)} stats applied{who} · checking persistence…'

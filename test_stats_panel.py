@@ -36,7 +36,7 @@ class StatsPanelTests(unittest.TestCase):
         self.panel.select('crit');self.panel.target.set('50');self.panel.apply(True)
         self.assertEqual(self.panel.controller.policy.request()['targets']['crit'],42)
         self.assertIn('crit',self.panel.controller.policy.pending)
-        self.assertIn(self.panel.table.set('crit','state'), ('Queued', 'Read-only'))
+        self.assertIn(self.panel.table.set('crit','state'), ('Queued', 'Checking role'))
         self.panel.target.set('101');self.panel.apply(True)
         self.assertTrue(self.panel.error.get())
         self.assertEqual(self.panel.controller.policy.targets['crit'],50)
