@@ -1,9 +1,5 @@
-import math
-from pathlib import Path
-import struct
-import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import trainer
 
@@ -12,10 +8,6 @@ class FakeMemory:
     def __init__(self):
         self.data = {}
         self.writes = []
-        for rva, raw in trainer.SIGNATURES.items():
-            self.put(rva, raw)
-        self.put(trainer.CONFIG_RVA, bytes(0x234))
-        self.put(trainer.CONFIG_RVA + 0x1F8, struct.pack('<f', 1))
 
     def put(self, address, raw):
         self.data.update({address + i: byte for i, byte in enumerate(raw)})
@@ -28,142 +20,25 @@ class FakeMemory:
         self.put(address, raw)
 
 
-class Tests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.t = trainer.Trainer.__new__(trainer.Trainer)
-        self.t.process = Mock(pid=123)
-        self.t.process.is_running.return_value = True
-        self.t.process.create_time.return_value = 456
-        self.t.process.exe.return_value = 'test.exe'
-        self.t.created = 456
-        self.t.path = 'test.exe'
-        self.t.base = 0
-        self.t.memory = FakeMemory()
-        self.t.journal = Path(self.temp.name) / 'recovery.json'
-        self.t.changes = {}
-        self.t.lock = None
+class ConnectionTests(unittest.TestCase):
+    def test_guard_rejects_an_exited_or_reused_process(self):
+        connection = trainer.Trainer.__new__(trainer.Trainer)
+        connection.memory = FakeMemory()
+        connection.process = Mock()
+        connection.process.is_running.return_value = True
+        connection.process.create_time.return_value = 2
+        connection.created = 1
+        with self.assertRaisesRegex(RuntimeError, 'connection lost'):
+            connection.guard()
 
-    def test_write_journal_precedes_write_and_restores(self):
-        real_write = self.t.memory.write
-
-        def checked_write(address, raw):
-            self.assertTrue(self.t.journal.exists())
-            real_write(address, raw)
-
-        self.t.memory.write = checked_write
-        self.t.set('god', 1)
-        self.assertEqual(self.t.values()['god'], 1)
-        self.t.restore()
-        self.assertEqual(self.t.values()['god'], 0)
-        self.assertFalse(self.t.changes)
-
-    def test_requested_run_defaults_use_minutes_and_preserve_later_edits(self):
-        from runtime import RunOptionDefaults
-        defaults = RunOptionDefaults()
-        self.assertTrue(defaults.apply(self.t))
-        values = self.t.values()
-        self.assertEqual((values['timescale'], values['clock'], values['rift_clock']), (3, 20, 1))
-        self.assertEqual(struct.unpack('<f', self.t.memory.read(trainer.CONFIG_RVA + 0x1FC, 4))[0], 1200)
-        self.t.set('timescale', 2)
-        self.t.set('clock', 5)
-        self.t.set('rift_clock', 0)
-        self.assertFalse(defaults.apply(self.t))
-        values = self.t.values()
-        self.assertEqual((values['timescale'], values['clock'], values['rift_clock']), (2, 5, 0))
-        self.t.restore()
-        self.assertEqual(self.t.values()['timescale'], 1)
-
-    def test_restore_keeps_external_change(self):
-        self.t.set('timescale', 2)
-        self.t.memory.put(trainer.CONFIG_RVA + 0x1F8, struct.pack('<f', 3))
-        self.t.restore()
-        self.assertEqual(self.t.values()['timescale'], 3)
-
-    def test_repeated_toggle_preserves_original(self):
-        self.t.set('god', 1)
-        self.t.set('god', 0)
-        self.t.set('god', 1)
-        self.t.restore()
-        self.assertEqual(self.t.values()['god'], 0)
-
-    def test_external_change_blocks_further_write(self):
-        self.t.set('timescale', 2)
-        self.t.memory.put(trainer.CONFIG_RVA + 0x1F8, struct.pack('<f', 3))
-        with self.assertRaises(RuntimeError):
-            self.t.set('timescale', 4)
-        self.assertEqual(len(self.t.memory.writes), 1)
-
-    def test_find_reapplies_requested_option_and_preserves_external_value_for_restore(self):
-        from threading import RLock
-        from compatibility import NativeLayout
-
-        self.t.write_gate = RLock()
-        self.t.requested_options = {}
-        self.t.build = trainer.BUILD
-        self.t.config_rva = trainer.CONFIG_RVA
-        self.t.request_option('timescale', 3)
-        self.t.memory.put(trainer.CONFIG_RVA + 0x1F8, struct.pack('<f', 2))
-        profile = NativeLayout(self.t.build, self.t.config_rva, dict(trainer.SIGNATURES))
-        with patch('trainer.resolve_native', return_value=profile):
-            values, failures = self.t.verify_run_options(lambda: False)
-        self.assertEqual(failures, [])
-        self.assertEqual(values['timescale'], 3)
-        self.t.restore()
-        self.assertEqual(self.t.values()['timescale'], 2)
-        self.assertEqual(self.t.requested_options, {})
-
-    def test_process_reuse_blocks_write(self):
-        self.t.process.create_time.return_value = 789
-        with self.assertRaises(RuntimeError):
-            self.t.set('god', 1)
-        self.assertEqual(self.t.memory.writes, [])
-
-    def test_instruction_mismatch_blocks_write(self):
-        self.t.memory.put(next(iter(trainer.SIGNATURES)), b'\xcc')
-        with self.assertRaises(RuntimeError):
-            self.t.set('god', 1)
-        self.assertEqual(self.t.memory.writes, [])
-
-    def test_uninitialized_config_blocks_write(self):
-        self.t.memory.put(trainer.CONFIG_RVA + 0x230, struct.pack('<I', 3))
-        with self.assertRaises(RuntimeError):
-            self.t.set('god', 1)
-        self.assertEqual(self.t.memory.writes, [])
-
-    def test_bad_flag_blocks_write(self):
-        self.t.memory.put(trainer.CONFIG_RVA + 0x208, b'\xff')
-        with self.assertRaises(RuntimeError):
-            self.t.set('autopick', 1)
-        self.assertEqual(self.t.memory.writes, [])
-
-    def test_invalid_values_rejected(self):
-        for key, value in [('god', 2), ('timescale', math.nan), ('timescale', 11), ('clock', -1), ('clock', 61)]:
-            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
-                self.t.set(key, value)
-        self.assertEqual(self.t.memory.writes, [])
-
-    def test_clock_uses_seconds(self):
-        self.t.set('clock', 5)
-        self.assertEqual(self.t.memory.read(trainer.CONFIG_RVA + 0x1FC, 4), struct.pack('<f', 300))
-        self.assertEqual(self.t.values()['clock'], 5)
-
-    def test_unchanged_setting_does_not_write(self):
-        self.t.set('god', 0)
-        self.assertEqual(self.t.memory.writes, [])
-        self.assertFalse(self.t.journal.exists())
-
-    def test_unknown_build_rejected_before_opening_memory(self):
-        path = Path(self.temp.name) / trainer.PROCESS_NAME
-        path.write_bytes(b'MZ unsupported game')
-        process = Mock()
-        process.exe.return_value = str(path)
-        with patch.object(trainer, 'find_games', return_value=[process]), patch.object(trainer, 'Memory') as memory:
-            with self.assertRaisesRegex(RuntimeError, 'Unsupported Reborn build'):
-                trainer.Trainer(writable=False)
-            memory.assert_not_called()
-
-
-if __name__ == '__main__':
-    unittest.main()
+    def test_guard_rejects_changed_legacy_instruction(self):
+        connection = trainer.Trainer.__new__(trainer.Trainer)
+        connection.memory = FakeMemory()
+        connection.process = Mock()
+        connection.process.is_running.return_value = True
+        connection.process.create_time.return_value = connection.created = 1
+        connection.process.exe.return_value = connection.path = 'game.exe'
+        connection.base = 0x10000
+        connection.signatures = {0x100: b'verified'}
+        with self.assertRaisesRegex(RuntimeError, 'instruction mismatch'):
+            connection.guard()

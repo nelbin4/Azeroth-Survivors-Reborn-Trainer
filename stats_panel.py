@@ -8,7 +8,7 @@ from stats_model import BY_KEY, VIEWS
 
 
 class StatsPanel:
-    def __init__(self, root, parent, session_provider, native_provider, closing, on_options=lambda result: None):
+    def __init__(self, root, parent, session_provider, native_provider, closing):
         self.root, self.closing = root, closing
         self.selected = None
         self.advanced = None
@@ -16,7 +16,7 @@ class StatsPanel:
         self.search_session = None
         self.search_started = None
         self.progress_running = False
-        self.controller = StatsController(root, session_provider, native_provider, closing, self.refresh, on_options)
+        self.controller = StatsController(root, session_provider, native_provider, closing, self.refresh)
 
         top = ttk.Frame(parent, padding=(14, 12, 14, 8))
         top.pack(fill='x')
@@ -220,8 +220,7 @@ class StatsPanel:
 
         found = active and bool(controller.policy.verified)
         checking_role = found and controller.role == 'unknown'
-        checking_options = found and controller.options_pending
-        working = active and (not found or checking_role or checking_options)
+        working = active and (not found or checking_role)
         if working != self.progress_running:
             self.search_progress.stop()
             self.progress_running = working
@@ -239,8 +238,6 @@ class StatsPanel:
         timer = f'{elapsed // 60}:{elapsed % 60:02d} elapsed'
         if checking_role:
             stage = 'Stats found. Checking session role'
-        elif checking_options:
-            stage = 'Stats found. Checking Run options'
         else:
             stage = 'Searching for stats'
         expectation = 'Usually takes 1–3 minutes' if elapsed < 180 else 'Still working'

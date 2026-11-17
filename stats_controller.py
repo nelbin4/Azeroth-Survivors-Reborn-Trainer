@@ -107,11 +107,6 @@ class StatsWorker:
                     if not cancelled() and current_role() == 'none':
                         candidate.ready_level()
                         result['xp_done'] = True
-            if request.get('verify_options') and native and result['values'] and not cancelled():
-                try:
-                    result['options_result'] = native.verify_run_options(cancelled)
-                except Exception as exc:
-                    result['options_result'] = exc
             return result
         except Exception:
             self.freezer.reset()
@@ -123,14 +118,12 @@ class StatsWorker:
 
 
 class StatsController:
-    def __init__(self,root,session_provider,native_provider,closing,on_change=lambda:None,on_options=lambda result:None):
+    def __init__(self,root,session_provider,native_provider,closing,on_change=lambda:None):
         self.root=root
         self.session_provider=session_provider
         self.native_provider=native_provider
         self.closing=closing
         self.on_change=on_change
-        self.on_options=on_options
-        self.options_pending=False
         self.policy=StatsPolicy()
         self.worker=StatsWorker()
         from trainer import ROOT
@@ -169,16 +162,11 @@ class StatsController:
             self.message='Wait for Reborn to connect before using Find.'
             self.on_change();return
         self.policy.searching=True
-        self.options_pending=True
-        self.on_options(None)
         self.message='Finding verified stats in the background…'
         self.changed()
 
     def stop_search(self):
         self.policy.searching=False
-        if self.options_pending:
-            self.on_options(InterruptedError('Search stopped before Run options verification.'))
-        self.options_pending=False
         self.message='Search stopped. Existing holds can continue.'
         self.changed()
 
@@ -239,9 +227,6 @@ class StatsController:
                 else:
                     old=set(self.policy.holds)
                     self.last=result
-                    if 'options_result' in result:
-                        self.options_pending = False
-                        self.on_options(result['options_result'])
                     self.policy.accept(result.get('owner'),result['values'])
                     successful=set(result['freeze'].get('held',{}))
                     self.policy.pending.difference_update(successful)
@@ -270,8 +255,6 @@ class StatsController:
         if session and monitor and not self.busy and time.monotonic()>=self.next_scan:
             request=self.policy.request()
             request['role_lease']=self.role_lease
-            request['verify_options'] = bool(self.options_pending and self.policy.verified
-                                             and self.policy.searching)
             native=self.native_provider()
             epoch=self.epoch
             cancel=threading.Event();self.cancel=cancel

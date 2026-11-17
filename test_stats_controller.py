@@ -158,22 +158,3 @@ class StatsControllerTests(unittest.TestCase):
         native.process.pid -= 1
         controller.find()
         self.assertTrue(controller.policy.searching)
-
-    def test_run_options_is_queued_during_find_and_runs_after_verified_stats(self):
-        controller = self.controller()
-        controller.worker = SimpleNamespace(mode=None, run=Mock(return_value={}))
-        controller.find()
-        with patch('stats_controller.threading.Thread') as thread:
-            controller.poll()
-            thread.call_args.kwargs['target']()
-        self.assertFalse(controller.worker.run.call_args.args[2]['verify_options'])
-        controller.results.get_nowait()
-        controller.busy = False
-        controller.next_scan = 0
-        controller.policy.accept('hero', {'damage': 7})
-        with patch('stats_controller.threading.Thread') as thread:
-            controller.poll()
-            thread.call_args.kwargs['target']()
-        self.assertTrue(controller.worker.run.call_args.args[2]['verify_options'])
-        controller.stop_search()
-        self.assertFalse(controller.options_pending)

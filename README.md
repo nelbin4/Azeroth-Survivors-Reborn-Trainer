@@ -1,10 +1,9 @@
-# Azeroth Survivor Reborn Trainer 0.9.8
+# Azeroth Survivor Reborn Trainer 0.9.9
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
 `6c2b16d2b363` executable layouts.
-The `d79ca7e2a239` build uses automatic Hunt holds for combat/resources and an
-independently verified Run options connection.
+The `d79ca7e2a239` build uses automatic Hunt holds for combat and resources.
 A separate trainer for **[Azeroth Survivors: Reborn](https://azreborn.com/)**.
 Reborn is a different game fork with its own executable, player layout and save
 format. This repository has independent releases and version history.
@@ -17,8 +16,7 @@ closed, click **Run Azeroth Survivors Reborn**. Start a solo run in the game,
 then open **Stats** and click **Find**. This starts automatic background Hunt.
 **Auto max & freeze newly found stats** is enabled by default. Verified fields
 are maximized on their first usable read while discovery continues. No stat search or stat
-write starts automatically before Find. Native run-option defaults still apply
-when the game connection is verified. Keep the trainer open.
+write starts automatically before Find. Keep the trainer open.
 
 ## Launch and process controls
 
@@ -60,14 +58,10 @@ units in the editor and its native float representation in memory. Current
 health follows the live verified maximum. Maximum-health targets are minimums;
 larger native bonuses are preserved.
 
-God mode is in **Run options**. Find checks the live Run options configuration after finding player stats and retries the requested settings if the game reset them. Run options reports readback or errors. Next-run settings are consumed by the game when the next run starts. **Advanced…** contains manual searches,
-detection details, and XP controls for verified solo layouts.
+**Advanced…** contains manual searches, detection details, and XP controls for verified solo layouts.
 
-Disabling a per-stat hold leaves its current value in place. **Restore native
-options** pauses stat freezes and restores eligible configuration changes; it
-does not roll back Hunt stat values. Closing the trainer leaves applied stat
-values in place and restores eligible native option changes. Game, build,
-owner and level changes invalidate stale results before any further write.
+Disabling a per-stat hold or closing the trainer leaves the current stat value in place.
+Game, build, and player ownership changes invalidate stale results before any further write.
 
 ## Trainer updates
 
@@ -122,12 +116,6 @@ not insert effects, allocate game memory or change equipment. Table movement or
 a missing effect skips Echo while other stats remain held. Numeric matches
 alone never enable writes. The category rows distinguish active freezes from pending or unverified fields.
 
-**Run options** are discovered independently of the player layout. Verified
-configuration anchors enable clock speed, starting minute, boss timing and the
-native switches even if the old player-name formatter has changed. Native writes
-and Hunt holds share the same in-app write gate and process mutex. The requested
-defaults remain speed 3, next-run minute 20, and bosses on the clock enabled.
-
 Hunt independently finds the player-array serializer in the game executable,
 checks those instructions in the loaded image, and searches thread stacks for
 candidate solo array owners. It hunts integer value pairs and stat-block values
@@ -166,7 +154,7 @@ skips that field; ownership changes stop the batch. A per-process writer lock
 prevents competing trainers from writing at once. No addresses are saved across
 sessions and Hunt does not edit saves. On `d79ca7e2a239`, the old full Player/name
 contract is still unavailable, so Stats uses independent Hunt field proofs.
-Run options remain usable. Verified older layouts feed the same Stats controls;
+Verified older layouts feed the same Stats controls;
 no old player-name contract is guessed.
 
 ### Automatic player mapping
@@ -209,7 +197,7 @@ save format/build. A compatible live layout does not establish save compatibilit
 ## Player controls
 
 **Max & freeze all** holds supported stats and resources at the trainer's limits.
-Current-health holds heal to full; God mode is controlled separately. These are bounded
+Current-health holds heal to full. These are bounded
 trainer limits; they are not a claim that every value has a native maximum.
 
 | Stat | Trainer limit |
@@ -240,20 +228,6 @@ resuming eligible holds. Stop search does not locate a new allocation until Find
 is used again. Pause freezes leaves configured targets intact and resumes only
 through Resume freezes or Max & freeze all. Keep the trainer open for active holds.
 
-## Native options
-
-The Run options tab defaults to **run clock speed 3**, **next-run starting minute
-20**, and **Bosses also arrive on the clock enabled**. The GUI applies these values
-once after attaching to each verified game process. Later edits and Restore are
-preserved across reconnects to that same process. The starting minute applies to
-the next run when the game reads it.
-
-God mode, auto-pick cards, all-zone access, showcase pickups, rift/bar/clock/vault
-options, run clock speed (0.1 to 10), and next-run starting minute (0 to 60).
-Some options are read only on menu entry or a new run. The native unlock-all
-flag alone has not been verified to grant progression; use the save upgrade tab.
-The game can mark these configurations as modified/test runs.
-
 ## Permanent progression
 
 Exit Reborn, then use **Max progression**. The trainer authenticates the save,
@@ -276,12 +250,9 @@ Backups are in the trainer folder's backups directory. To undo a permanent
 upgrade, close Reborn and restore the corresponding before-max.sav to
 UserData/survivors-save.tsv in the game directory. Keep your backup private.
 
-## Restore and validation
+## Validation
 
-Restore changes or closing the trainer conditionally restores native options and
-unchanged player stats from the same level. Run gold and rerolls are one-time resource grants reapplied while held; Restore leaves their balances intact. Gold, XP, healing and permanent
-progression are not undone. Process restarts invalidate recovery records.
-A crash may leave held stats until the game recalculates them or the run ends.
+Stat values can persist until the game recalculates them or the run ends.
 
 Originally verified executable SHA-256:
 `ab7b6332a6c47e4c29188e44932939e560b274cf06e0f212cb3ada119a3a3d35`.
@@ -313,7 +284,7 @@ Hunt verifies the selected character's live identity string using corroborating 
 
 **Host session (automatic)** follows the game's live lobby role. It checks itself for a verified host and clears itself for a guest or a solo/no-lobby session. Guests and unknown roles cannot authorize stat writes, including a guest currently alone in a player array. There is no manual host override. Only the character selected by the verified game index is eligible; other party members are left alone. XP assistance remains solo-only.
 
-Role discovery runs read-only in the background when the game is detected. A cold scan or a UI runtime reload may take longer on processes with large memory footprints; the UI stays responsive and stat writes wait for verification. A process-bound address cache is always revalidated against the live Lua main thread, global environment and current lobby table. Runtime, PID, global-table and lobby changes invalidate old ownership. Role is checked again before every stat write. Find still starts stat discovery and automatic max/freeze. Native Run options use their independent detector and remain available while role detection runs.
+Role discovery runs read-only in the background when the game is detected. A cold scan or a UI runtime reload may take longer on processes with large memory footprints; the UI stays responsive and stat writes wait for verification. A process-bound address cache is always revalidated against the live Lua main thread, global environment and current lobby table. Runtime, PID, global-table and lobby changes invalidate old ownership. Role is checked again before every stat write. Find still starts stat discovery and automatic max/freeze.
 
 The reader validates the game's Lua 5.1 runtime object layout. An unsupported runtime stays unknown/read-only; future game versions are not guaranteed compatible.
 

@@ -4,75 +4,28 @@ from __future__ import annotations
 import argparse
 import ctypes
 from ctypes import wintypes
-from dataclasses import dataclass
 import hashlib
 import json
 import logging
-import math
 import os
 from pathlib import Path
-import struct
 import sys
 import threading
 import queue
 import time
-from runtime import RetrySchedule, same_session, RunOptionDefaults, RUN_OPTION_DEFAULTS
-from game_process import GameLauncher, GameSession, PROCESS_NAME, same_path
+from runtime import RetrySchedule
+from game_process import GameLauncher, PROCESS_NAME, same_path
 import updater
 import webbrowser
 
 import psutil
-from player import Player, STATS
-from compatibility import resolve, resolve_native, Layout
+from compatibility import resolve, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.9.8'
+VERSION = '0.9.9'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
-JOURNAL = ROOT / 'reborn-recovery.json'
 BUILD = 'ab7b6332a6c47e4c29188e44932939e560b274cf06e0f212cb3ada119a3a3d35'
-CONFIG_RVA = 0xA6EF610
-# Instructions independently identify the config constructor, comparison and live reader.
-SIGNATURES = {
-    0x7139363: bytes.fromhex('0f958208020000'),
-    0x71417F8: bytes.fromhex('0fb68208020000'),
-    0x6EB6123: bytes.fromhex('0fb635ee968303'),
-}
-
-
-@dataclass(frozen=True)
-class Feature:
-    label: str
-    offset: int
-    fmt: str
-    minimum: float = 0
-    maximum: float = 1
-    note: str = 'Live config'
-
-    def encode(self, value):
-        if self.fmt == 'B':
-            if value not in (0, 1, False, True):
-                raise ValueError(f'{self.label}: choose on or off.')
-            return struct.pack('<B', int(value))
-        value = float(value)
-        if not math.isfinite(value) or not self.minimum <= value <= self.maximum:
-            raise ValueError(f'{self.label}: enter {self.minimum:g} to {self.maximum:g}.')
-        return struct.pack('<' + self.fmt, value)
-
-
-FEATURES = {
-    'god': Feature('God mode', 0x208, 'B', note='Invulnerability; live verification pending'),
-    'autopick': Feature('Auto-pick level-up cards', 0x209, 'B', note='Random card selection'),
-    'all_zones': Feature('Open all zones / difficulties', 0x20B, 'B', note='Refresh the hero menu'),
-    'showcase': Feature('Showcase pickups', 0x20A, 'B', note='At the start of the next run'),
-    'unlock_all': Feature('Unlock gear / cosmetics / talent points', 0x214, 'B', note='Test-save option; next login, unverified'),
-    'rift': Feature('Enable boss rift bar', 0x20D, 'B'),
-    'rift_clock': Feature('Bosses also arrive on the clock', 0x20E, 'B'),
-    'rifts': Feature('Enable rifts', 0x20F, 'B'),
-    'vaults': Feature('Enable vault portals', 0x210, 'B'),
-    'timescale': Feature('Run clock speed', 0x1F8, 'f', 0.1, 10, '1 = normal; affects the run clock'),
-    'clock': Feature('Next run starts at minute', 0x1FC, 'f', 0, 3600, 'Stored as seconds; earlier bosses count as slain'),
-}
 
 
 def find_games(path=None):
@@ -131,14 +84,11 @@ def atomic_json(path, data):
 
 
 class Trainer:
-    def __init__(self, path=None, writable=True, journal=JOURNAL, session=None):
+    def __init__(self, path=None, writable=True, session=None):
         self.write_gate = threading.RLock()
         self.path = path
         self.memory = None
         self.process = None
-        self.journal = journal
-        self.changes = {}
-        self.requested_options = {}
         self.lock = None
         if session and path and not same_path(session.path, path):
             raise RuntimeError('Selected process does not match the game path.')
@@ -152,17 +102,19 @@ class Trainer:
         self.path = self.process.exe()
         try:
             self.profile = resolve(self.path)
-        except RuntimeError as full_error:
-            if not str(full_error).startswith('Unsupported Reborn build'):
+        except RuntimeError as exc:
+            if not str(exc).startswith('Unsupported Reborn build'):
                 raise
-            try:
-                self.profile = resolve_native(self.path)
-            except Exception:
-                raise full_error
+            # Find verifies newer layouts independently of legacy detection.
+            self.profile = None
         self.player_supported = isinstance(self.profile, Layout)
-        self.build = self.profile.digest
-        self.config_rva = self.profile.config
-        self.signatures = self.profile.signatures
+        if self.player_supported:
+            self.build = self.profile.digest
+            self.signatures = self.profile.signatures
+        else:
+            with Path(self.path).open('rb') as image:
+                self.build = hashlib.file_digest(image, 'sha256').hexdigest()
+            self.signatures = {}
         modules = [m for m in self.process.memory_maps(grouped=False)
                    if os.path.normcase(m.path) == os.path.normcase(self.path)]
         if not modules:
@@ -173,19 +125,6 @@ class Trainer:
                 self.lock = InstanceLock(f'{self.process.pid}_{self.created}')
             self.memory = Memory(self.process.pid, writable)
             self.guard()
-            if journal.exists():
-                previous = json.loads(journal.read_text(encoding='utf-8'))
-                if (previous.get('pid'), previous.get('created'), previous.get('base'), previous.get('build')) == self.identity():
-                    for key, change in previous.get('changes', {}).items():
-                        if key not in FEATURES:
-                            raise RuntimeError('Recovery journal contains an unknown field.')
-                        for field in ('before', 'after'):
-                            raw = bytes.fromhex(change[field])
-                            feature = FEATURES[key]
-                            if len(raw) != struct.calcsize('<' + feature.fmt):
-                                raise RuntimeError('Recovery journal has an invalid field size.')
-                            feature.encode(struct.unpack('<' + feature.fmt, raw)[0])
-                        self.changes[key] = change
         except Exception:
             if self.memory:
                 self.memory.close()
@@ -193,114 +132,14 @@ class Trainer:
                 self.lock.close()
             raise
 
-    def identity(self):
-        return self.process.pid, self.created, self.base, getattr(self, 'build', BUILD)
-
     def guard(self):
-        if not self.process.is_running() or self.process.create_time() != self.created:
-            raise RuntimeError('Game restarted; reconnect before changing options.')
-        if os.path.normcase(self.process.exe()) != os.path.normcase(self.path):
+        if not self.memory or not self.process.is_running() or self.process.create_time() != self.created:
+            raise RuntimeError('Game connection lost. Reconnect before using Find.')
+        if not same_path(self.process.exe(), self.path):
             raise RuntimeError('Game process path changed.')
-        for rva, expected in getattr(self, 'signatures', SIGNATURES).items():
+        for rva, expected in self.signatures.items():
             if self.memory.read(self.base + rva, len(expected)) != expected:
-                raise RuntimeError('Game instruction mismatch; no changes applied.')
-        config = self.memory.read(self.base + getattr(self, 'config_rva', CONFIG_RVA), 0x234)
-        if struct.unpack_from('<I', config, 0x230)[0] != 0:
-            raise RuntimeError('Reborn configuration is not initialized.')
-        if any(config[FEATURES[k].offset] not in (0, 1) for k in FEATURES if FEATURES[k].fmt == 'B'):
-            raise RuntimeError('Unexpected configuration flags; changes blocked.')
-        speed, clock = struct.unpack_from('<2f', config, 0x1F8)
-        if not math.isfinite(speed) or not 0 < speed <= 1000 or not math.isfinite(clock) or not 0 <= clock <= 1e9:
-            raise RuntimeError('Unexpected configuration values; changes blocked.')
-        return config
-
-    def values(self):
-        config = self.guard()
-        result = {k: struct.unpack_from('<' + f.fmt, config, f.offset)[0] for k, f in FEATURES.items()}
-        result['clock'] /= 60
-        return result
-
-    def persist(self):
-        pid, created, base, build = self.identity()
-        atomic_json(self.journal, dict(pid=pid, created=created, base=base, build=build, changes=self.changes))
-
-    def set(self, key, value):
-        with getattr(self,'write_gate',threading.RLock()):
-            return self._set(key,value)
-
-    def request_option(self, key, value):
-        # Keep the validated request even if the game was between states.
-        with self.write_gate:
-            FEATURES[key].encode(float(value) * 60 if key == 'clock' else value)
-            self.requested_options[key] = value
-            self._set(key, value, rebase=True)
-
-    def verify_run_options(self, cancelled):
-        profile = resolve_native(self.path)
-        with self.write_gate:
-            if cancelled():
-                raise InterruptedError('Run options check stopped.')
-            if (profile.digest, profile.config) != (self.build, self.config_rva):
-                raise RuntimeError('Run options layout changed. Reconnect to Reborn.')
-            for rva, expected in profile.signatures.items():
-                if self.memory.read(self.base + rva, len(expected)) != expected:
-                    raise RuntimeError('Run options instructions do not match the running game.')
-            failures = []
-            for key, value in self.requested_options.items():
-                if cancelled():
-                    raise InterruptedError('Run options check stopped.')
-                try:
-                    self._set(key, value, rebase=True)
-                except (ValueError, RuntimeError, OSError) as exc:
-                    failures.append(str(exc))
-            return self.values(), failures
-
-    def _set(self, key, value, *, rebase=False):
-        feature = FEATURES[key]
-        if key == 'clock':
-            value = float(value) * 60
-        after = feature.encode(value)
-        config = self.guard()
-        before = config[feature.offset:feature.offset + len(after)]
-        if before == after:
-            return
-        if key in self.changes and before.hex() != self.changes[key]['after']:
-            if not rebase:
-                raise RuntimeError('This option was changed outside the trainer. Restore changes and retry.')
-            # An explicit UI request can reapply a reset option. Restore will
-            # return it to the most recent value the game actually supplied.
-            self.changes[key] = dict(before=before.hex(), after=before.hex())
-        change = self.changes.setdefault(key, dict(before=before.hex(), after=before.hex()))
-        change['after'] = after.hex()
-        self.persist()  # recovery information reaches disk before any game write
-        self.guard()
-        address = self.base + getattr(self, 'config_rva', CONFIG_RVA) + feature.offset
-        if self.memory.read(address, len(before)) != before:
-            raise RuntimeError('Game configuration changed during the operation.')
-        self.memory.write(address, after)
-        if self.memory.read(address, len(after)) != after:
-            raise RuntimeError('Game did not retain the requested option.')
-        logging.info('PID %s: %s = %s', self.process.pid, key, value)
-
-    def restore(self):
-        with getattr(self,'write_gate',threading.RLock()):
-            return self._restore()
-
-    def _restore(self):
-        if hasattr(self, 'requested_options'):
-            self.requested_options.clear()
-        self.guard()
-        for key, change in list(self.changes.items()):
-            self.guard()
-            feature = FEATURES[key]
-            address = self.base + getattr(self, 'config_rva', CONFIG_RVA) + feature.offset
-            before, after = bytes.fromhex(change['before']), bytes.fromhex(change['after'])
-            if self.memory.read(address, len(after)) == after:
-                self.memory.write(address, before)
-                if self.memory.read(address, len(before)) != before:
-                    raise RuntimeError(f'Could not restore {feature.label}.')
-            del self.changes[key]
-            self.persist()
+                raise RuntimeError('Game instruction mismatch. Reconnect before using Find.')
 
     def close(self):
         with getattr(self,'write_gate',threading.RLock()):
@@ -387,22 +226,15 @@ def run_gui():
     tabs = ttk.Notebook(body)
     tabs.pack(fill='both', expand=True)
     stats_tab = ttk.Frame(tabs)
-    native_tab = ttk.Frame(tabs, padding=10)
     progression_tab = ttk.Frame(tabs, padding=12)
     tabs.add(stats_tab, text='Stats')
-    tabs.add(native_tab, text='Run options')
     tabs.add(progression_tab, text='Saves')
-    options = ttk.Frame(native_tab)
-    options.pack(fill='x')
-    variables = {}
-    widgets = []
     trainer = None
     pending = queue.Queue()
     connection_generation = 0
     launcher = GameLauncher()
     next_process_scan = 0
     retry = RetrySchedule()
-    run_defaults = RunOptionDefaults()
     connecting = False
     closing = False
     try:
@@ -414,78 +246,8 @@ def run_gui():
         logging.exception('Trainer operation failed')
         status.set(str(exc))
 
-    def toggle(key):
-        if not trainer:
-            return
-        try:
-            trainer.request_option(key, variables[key].get())
-            options_status.set(f'{FEATURES[key].label} written and read back.')
-            status.set(f'{FEATURES[key].label}: {"on" if variables[key].get() else "off"}')
-        except Exception as exc:
-            error(exc)
-            options_status.set(str(exc))
-            refresh_values()
-
-    for key, feature in FEATURES.items():
-        row = ttk.Frame(options)
-        row.pack(fill='x', pady=5)
-        if feature.fmt == 'B':
-            variable = tk.BooleanVar(value=bool(RUN_OPTION_DEFAULTS.get(key, False)))
-            widget = ttk.Checkbutton(row, text=feature.label, variable=variable, command=lambda k=key: toggle(k))
-            widget.pack(side='left')
-        else:
-            variable = tk.StringVar(value=str(RUN_OPTION_DEFAULTS.get(key, 0)))
-            ttk.Label(row, text=feature.label).pack(side='left')
-            widget = ttk.Entry(row, textvariable=variable, width=8)
-            widget.pack(side='right')
-            button = ttk.Button(row, text='Apply', width=7, command=lambda k=key: apply_number(k))
-            button.pack(side='right', padx=8)
-            widgets.append(button)
-        variables[key] = variable
-        widgets.append(widget)
-
-    def apply_number(key):
-        if trainer:
-            try:
-                trainer.request_option(key, variables[key].get())
-                options_status.set(f'{FEATURES[key].label} written and read back.')
-                status.set(f'{FEATURES[key].label} applied and read back.')
-            except Exception as exc:
-                error(exc)
-                options_status.set(str(exc))
-                refresh_values()
-
-    def refresh_values():
-        if trainer:
-            try:
-                for key, value in trainer.values().items():
-                    variables[key].set(bool(value) if FEATURES[key].fmt == 'B' else f'{value:g}')
-            except Exception as exc:
-                error(exc)
-
-    options_status = tk.StringVar(value='Find checks Run options after player stats.')
-    ttk.Label(native_tab, textvariable=options_status, wraplength=850,
-              foreground='#76dfc1').pack(anchor='w', pady=(12, 0))
-
-    def report_options(result):
-        if result is None:
-            options_status.set('Queued after player stats…')
-            return
-        if isinstance(result, Exception):
-            options_status.set(f'Run options could not be verified: {result}')
-            return
-        _, failures = result
-        # Leave text-entry drafts alone. Checkbox and numeric edits already
-        # show the user's requested values, and failures are listed here.
-        if failures:
-            options_status.set('Some Run options could not be applied: ' + '; '.join(failures))
-        else:
-            options_status.set('Run options verified in game memory. Next-run settings apply when a new run starts.')
-
-    ttk.Label(native_tab, text='Menu / next-run options take effect when the game reads them.\nThe native unlock-all flag alone is unverified; use Saves for progression upgrades.',
-              wraplength=600, foreground='#a9b8c8').pack(anchor='w', pady=(14, 12))
     from stats_panel import StatsPanel
-    stats_panel = StatsPanel(root, stats_tab, lambda: launcher.session, lambda: trainer, lambda: closing, report_options)
+    stats_panel = StatsPanel(root, stats_tab, lambda: launcher.session, lambda: trainer, lambda: closing)
 
     ttk.Label(progression_tab, text='Max permanent progression', font=('Segoe UI', 14, 'bold')).pack(anchor='w', pady=(0, 12))
     ttk.Label(progression_tab, text='Creates and verifies an upgraded save from this exact game build, with an original backup.\n\n• All class gear, every rarity, upgraded\n• All catalog achievements\n• Maximum class talent experience\n• Account level 30\n\nExit the game before applying. Your character identities and other save records are kept. Individual talent allocations are not changed.',
@@ -535,35 +297,13 @@ def run_gui():
     actions = ttk.Frame(body)
     actions.pack(fill='x')
 
-    def restore():
-        stats_panel.controller.options_pending = False
-        stats_panel.controller.policy.paused = True
-        stats_panel.controller.changed()
-        if trainer:
-            try:
-                trainer.restore()
-                refresh_values()
-                options_status.set('Run options restored.')
-                status.set('Native options restored. Stat freezes paused; current stat values remain.')
-            except Exception as exc:
-                error(exc)
-
-    restore_button = ttk.Button(actions, text='Restore native options', command=restore)
-    restore_button.pack(side='left', padx=(0, 6))
-    widgets.append(restore_button)
-
     def disconnect_game():
         nonlocal trainer, connection_generation, connecting
         connection_generation += 1
         connecting = False
         stats_panel.controller.invalidate()
         if trainer:
-            try:
-                trainer.restore()
-            except (RuntimeError, OSError, psutil.Error) as exc:
-                logging.warning('Restore before disconnect: %s', exc)
-            finally:
-                trainer.close()
+            trainer.close()
         trainer = None
         retry.reset()
 
@@ -758,11 +498,7 @@ def run_gui():
             elif isinstance(result, Exception):
                 connecting = False
                 retry.failed(time.monotonic())
-                if 'Memory controls are blocked' in str(result):
-                    logging.warning('Full layout discovery: %s',result)
-                    status.set('Could not verify this game build. Find is unavailable until connected.')
-                else:
-                    status.set(str(result))
+                status.set(str(result))
             else:
                 connecting = False
                 selected = launcher.session
@@ -775,14 +511,8 @@ def run_gui():
                     retry.reset()
                     saved['game_exe'] = trainer.path
                     atomic_json(SETTINGS, saved)
-                    status.set(f'Connected to PID {trainer.process.pid}. Run options ready; use Find in Stats to start Hunt.')
+                    status.set(f'Connected to PID {trainer.process.pid}. Use Find in Stats to start Hunt.')
                     detail.set(trainer.path)
-                    try:
-                        trainer.requested_options.update(RUN_OPTION_DEFAULTS)
-                        run_defaults.apply(trainer)
-                    except Exception as exc:
-                        error(exc)
-                    refresh_values()
         except queue.Empty:
             pass
         if trainer:
@@ -796,8 +526,6 @@ def run_gui():
                 retry.failed(time.monotonic())
                 status.set(str(exc))
         stats_panel.refresh_connection()
-        for widget in widgets:
-            widget.configure(state='normal' if trainer else 'disabled')
         if not trainer and not connecting and launcher.session and retry.ready(time.monotonic()):
             connecting = True
             threading.Thread(target=connect_worker, args=(launcher.session, connection_generation), daemon=True).start()
@@ -809,10 +537,6 @@ def run_gui():
         closing = True
         stats_panel.controller.close()
         if trainer:
-            try:
-                trainer.restore()
-            except (RuntimeError, OSError, psutil.Error) as exc:
-                logging.warning('Restore on close: %s', exc)
             trainer.close()
         while not pending.empty():
             _, result = pending.get_nowait()
@@ -827,10 +551,8 @@ def run_gui():
 
 def main():
     parser = argparse.ArgumentParser(description=APP_NAME)
-    parser.add_argument('command', nargs='?', default='gui', choices=['gui', 'status', 'set', 'restore'])
+    parser.add_argument('command', nargs='?', default='gui', choices=['gui', 'status'])
     parser.add_argument('--game', help='Full path to AzerothSurvivorsGame.exe')
-    parser.add_argument('--feature', choices=FEATURES)
-    parser.add_argument('--value', type=float)
     parser.add_argument('--max-player', action='store_true', help='Compatibility flag retained; use Find and auto max/freeze in Stats.')
     args = parser.parse_args()
     logging.basicConfig(filename=ROOT / 'reborn-trainer.log', level=logging.INFO,
@@ -838,16 +560,10 @@ def main():
     if args.command == 'gui':
         run_gui()
         return
-    trainer = Trainer(args.game, writable=args.command != 'status')
+    trainer = Trainer(args.game, writable=False)
     try:
-        if args.command == 'set':
-            if args.feature is None or args.value is None:
-                parser.error('set requires --feature and --value')
-            trainer.set(args.feature, args.value)
-        elif args.command == 'restore':
-            trainer.restore()
         print(json.dumps(dict(app=APP_NAME, version=VERSION, pid=trainer.process.pid,
-                              game=trainer.path, build=trainer.build, values=trainer.values()), indent=2))
+                              game=trainer.path, build=trainer.build), indent=2))
     finally:
         trainer.close()
 

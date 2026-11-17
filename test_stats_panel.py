@@ -93,10 +93,6 @@ class StatsPanelTests(unittest.TestCase):
         self.assertIn('Stats found. Checking session role', self.panel.search_hint.get())
         self.panel.controller.role = 'none'
         self.panel.refresh()
-        self.assertTrue(self.panel.progress_running)
-        self.assertIn('Checking Run options', self.panel.search_hint.get())
-        self.panel.controller.options_pending = False
-        self.panel.refresh()
         self.assertFalse(self.panel.progress_running)
         self.assertEqual(float(self.panel.search_progress['value']), 100)
         self.panel.find_button.invoke()
