@@ -37,6 +37,49 @@ class HuntFreezeTests(unittest.TestCase):
     def apply(self,**kwargs):
         return self.freezer.apply(self.hunt,self.result,self.memory,self.fields,**kwargs)
 
+    def add_echo(self):
+        table=bytearray(512)
+        table[0x100:0x104]=bytes([255,2,255,255])
+        struct.pack_into('<B3xf',table,0xF0,13,.09)
+        self.memory.regions[0x400000]=table
+        struct.pack_into('<4Q',self.hero,0x200,0x400100,3,2,1)
+        proof=FieldProof('echo',0x200,'f',1,((0x30,b'proof'),),(0x208,0x218,13))
+        self.hunt.plan=replace(self.hunt.plan,fields=(*self.hunt.plan.fields,proof))
+        self.fields=self.freezer.observe(self.hunt,self.result)
+        return table
+
+    def test_echo_is_maxed_in_its_current_table_and_held(self):
+        self.prepare(('run_gold',))
+        table=self.add_echo()
+        self.assertEqual(self.apply()['held']['echo'],1)
+        self.assertEqual(struct.unpack_from('<f',table,0xF4)[0],1)
+        writes=len(self.writes)
+        self.apply()
+        self.assertEqual(len(self.writes),writes)
+
+    def test_absent_echo_does_not_block_other_stats(self):
+        self.prepare(('run_gold',));table=self.add_echo()
+        table[0x101]=255;struct.pack_into('<Q',self.hero,0x218,0)
+        result=self.apply()
+        self.assertEqual(result['held'],{'run_gold':99999999})
+        self.assertIn('echo',result['errors'])
+
+    def test_table_rehash_before_write_does_not_follow_stale_effect_pointer(self):
+        self.prepare(('run_gold',));table=self.add_echo()
+        self.memory.regions[0x500000]=bytearray(table)
+        read=self.memory.read;hits=0
+        def moving(address,size):
+            nonlocal hits
+            if address==self.pointer+0x200 and size==32:
+                hits+=1
+                if hits==2:struct.pack_into('<Q',self.hero,0x200,0x500100)
+            return read(address,size)
+        self.memory.read=moving
+        result=self.apply()
+        self.assertIn('echo',result['errors'])
+        self.assertEqual(result['held'],{'run_gold':99999999})
+        self.assertTrue(all(address==self.pointer+0x15C for address,_ in self.writes))
+
     def test_one_verified_field_is_maxed_and_held_without_waiting_for_others(self):
         self.prepare(('run_gold',))
         before=bytes(self.hero)

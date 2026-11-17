@@ -17,6 +17,7 @@ class FieldProof:
     fmt: str
     maximum: int
     guards: tuple
+    indirect: tuple = ()
 
 
 # Rust's compact format description fixes the argument order independently of
@@ -165,6 +166,17 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
                 result.append(FieldProof(key,offset,stat.fmt,stat.maximum,tuple(guards.items())))
     except (ValueError,StopIteration,struct.error,IndexError):
         pass
+    if not any(p.key in ('damage','crit','crit_damage','cooldown','area','targets',
+                         'armor','regen','speed','pickup','gold_bonus','luck') for p in result):
+        from compact_stats import discover_compact_stats
+        fields,guards = discover_compact_stats(blob,sections,code,text_rva,array,stats)
+        for key,relative in fields.items():
+            if key=='echo':
+                _,control,mask,count,kind=relative
+                result.append(FieldProof('echo',control,'f',1,tuple(guards.items()),(mask,count,kind)))
+                continue
+            stat=STATS[key]
+            result.append(FieldProof(key,stats+relative,stat.fmt,stat.maximum,tuple(guards.items())))
     # Healing requires a verified maximum; maximum health can stand alone.
     keys = {p.key for p in result}
     return tuple(p for p in result if p.key != 'health' or 'max_health' in keys)

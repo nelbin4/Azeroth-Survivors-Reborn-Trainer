@@ -1,8 +1,10 @@
-# Azeroth Survivor Reborn Trainer 0.8.1
+# Azeroth Survivor Reborn Trainer 0.8.2
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
 `6c2b16d2b363` executable layouts.
+The `d79ca7e2a239` build uses automatic Hunt holds for combat/resources and an
+independently verified Run options connection.
 A separate trainer for **[Azeroth Survivors: Reborn](https://azreborn.com/)**.
 Reborn is a different game fork with its own executable, player layout and save
 format. This repository has independent releases and version history.
@@ -99,10 +101,24 @@ when the trainer closes. Hunt does not add changes to the normal Restore journal
 The running `d79ca7e2a239` build independently proves maximum health, current
 health, run gold and rerolls through the named resource formatter, its integer
 formatter widths, and a second serializer using the same player array. These
-fields can be maxed while the combat/utility slots are still unmapped. A named
-Stats formatter can independently prove additional combat fields on other builds.
-Numeric matches alone never enable writes. The panel lists actual held fields
-separately from unverified value candidates.
+fields are joined by all 12 combat/utility stats through the newer compact named
+formatter. Bounded control-flow analysis follows each 32-bit copied Stats field
+through calculations into its named display argument; it tolerates reordered
+fields and rejects ambiguous dependencies. Verified single-input math helpers
+and integer formatter widths are included in the loaded-code guards.
+
+Echo uses an independently traced active-effects table entry. When that effect
+is present, Hunt maxes its chance to 100% and revalidates the table header, key
+and bucket before writes. It keeps hunting when the entry is absent; it does
+not insert effects, allocate game memory or change equipment. Table movement or
+a missing effect skips Echo while other stats remain held. Numeric matches
+alone never enable writes. The panel lists held fields separately from candidates.
+
+**Run options** are discovered independently of the player layout. Verified
+configuration anchors enable clock speed, starting minute, boss timing and the
+native switches even if the old player-name formatter has changed. Native writes
+and Hunt holds share the same in-app write gate and process mutex. The requested
+defaults remain speed 3, next-run minute 20, and bosses on the clock enabled.
 
 Hunt independently finds the player-array serializer in the game executable,
 checks those instructions in the loaded image, and searches thread stacks for
@@ -140,8 +156,10 @@ freezes recheck executable identity, loaded code, the selected process, solo
 ownership, hero identity and level before writes. A field-specific proof failure
 skips that field; ownership changes stop the batch. A per-process writer lock
 prevents competing trainers from writing at once. No addresses are saved across
-sessions and Hunt does not edit saves. The full named player mapping on
-`d79ca7e2a239` remains incomplete; Hunt does not unlock its full Max all stats button.
+sessions and Hunt does not edit saves. On `d79ca7e2a239`, the old full Player/name
+contract is still unavailable, so live stat holds use Hunt. **View Hunt stats**
+opens the active hold list; Run options remain usable. Legacy player controls
+are never enabled with guessed name or field offsets.
 
 ### Automatic player mapping
 

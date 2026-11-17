@@ -246,7 +246,7 @@ class HuntSchedule:
         return min(15, 2 ** min(self.failures, 4))
 
 
-def add_automatic_panel(root, parent, session_provider, needed, closing):
+def add_automatic_panel(root, parent, session_provider, needed, closing, native_provider=lambda:None):
     import queue
     import threading
     import tkinter as tk
@@ -314,7 +314,8 @@ def add_automatic_panel(root, parent, session_provider, needed, closing):
                     lines = []
                     frozen = result.get('freeze',{})
                     for key,target in frozen.get('held',{}).items():
-                        lines.append(f'MAX & FROZEN · {key.replace("_"," ")} · {target:,}')
+                        shown=f'{target*100:g}%' if key=='echo' else f'{target:,}'
+                        lines.append(f'MAX & FROZEN · {key.replace("_"," ")} · {shown}')
                     for key,message in frozen.get('errors',{}).items():
                         lines.append(f'Waiting · {key.replace("_"," ")} · {message}')
                     if frozen.get('message'):
@@ -342,6 +343,7 @@ def add_automatic_panel(root, parent, session_provider, needed, closing):
             busy = True
             stop.clear()
             token = generation
+            native = native_provider()
             status.set(f'Automatic Hunt scanning in background · PID {session.pid}…')
             def work():
                 from trainer import Memory, InstanceLock
@@ -356,9 +358,19 @@ def add_automatic_panel(root, parent, session_provider, needed, closing):
                         fields = freezer.observe(hunt,result)
                         if fields:
                             try:
-                                lock = InstanceLock(f'{session.pid}_{session.created}')
-                                writable = Memory(session.pid,writable=True)
-                                result['freeze'] = freezer.apply(hunt,result,writable,fields,cancelled)
+                                # A native-only Trainer in this same app already
+                                # owns the process mutex. Serialize with its
+                                # writes/close instead of competing with it.
+                                if (native is not None and native.process.pid == session.pid
+                                        and native.created == session.created and native.lock):
+                                    with native.write_gate:
+                                        native.guard()
+                                        writable = Memory(session.pid,writable=True)
+                                        result['freeze'] = freezer.apply(hunt,result,writable,fields,cancelled)
+                                else:
+                                    lock = InstanceLock(f'{session.pid}_{session.created}')
+                                    writable = Memory(session.pid,writable=True)
+                                    result['freeze'] = freezer.apply(hunt,result,writable,fields,cancelled)
                             except Exception as exc:
                                 result['freeze'] = dict(message=f'Freeze paused: {exc}')
                         else:

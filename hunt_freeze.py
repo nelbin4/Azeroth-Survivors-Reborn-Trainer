@@ -1,5 +1,6 @@
 """Apply independently verified Hunt fields without waiting for the full layout."""
 import struct
+import math
 
 from player import STATS
 
@@ -31,9 +32,15 @@ class HuntFreezer:
             return ()
         fields = []
         for proof in hunt.plan.fields:
+            if proof.key!='echo' and proof.indirect:
+                continue
             stat = STATS.get(proof.key)
             if proof.key == 'health':
                 fmt,maximum = 'Q',1000000
+            elif proof.key=='echo' and (len(proof.indirect)==3 and proof.indirect[0]==proof.offset+8
+                                       and proof.indirect[1]==proof.offset+24 and 0<=proof.indirect[2]<=255
+                                       and proof.offset<=hunt.plan.stride-32):
+                fmt,maximum = 'f',1
             elif stat:
                 fmt,maximum = stat.fmt,stat.maximum
             else:
@@ -60,6 +67,31 @@ class HuntFreezer:
         if any(proof not in plan.fields for proof in fields):
             raise RuntimeError('Field proof does not belong to the active search plan.')
         held,errors = {},{}
+
+        def address_of(proof):
+            if not proof.indirect:
+                return hero['hero']+proof.offset,None
+            raw=memory.read(hero['hero']+proof.offset,32)
+            control,mask,_,count=struct.unpack('<4Q',raw)
+            if (not 0x10000<=control<0x7FFFFFFFF000 or not 0<=mask<1024
+                    or (mask+1)&mask or not 1<=count<=min(mask+1,64)):
+                raise ValueError('Active-effects table is not available yet.')
+            controls=memory.read(control,mask+1)
+            if sum(c<0x80 for c in controls)!=count:
+                raise ValueError('Active-effects table changed; retrying.')
+            found=[]
+            for index,occupied in enumerate(controls):
+                if occupied>=0x80:continue
+                payload=control-8*(index+1)
+                item=memory.read(payload,8)
+                if item[0]==proof.indirect[2]:
+                    value=struct.unpack_from('<f',item,4)[0]
+                    if not math.isfinite(value) or not 0<=value<=1:
+                        raise ValueError('Unexpected effect value; waiting for verification.')
+                    found.append(payload+4)
+            if len(found)!=1:
+                raise ValueError('Echo effect is not active yet; hunting its entry.')
+            return found[0],raw
 
         def guard(proof):
             if cancelled():
@@ -90,7 +122,11 @@ class HuntFreezer:
             except FieldProofChanged as exc:
                 errors[proof.key] = str(exc)
                 continue
-            address = hero['hero']+proof.offset
+            try:
+                address,table_before = address_of(proof)
+            except (ValueError,OSError) as exc:
+                errors[proof.key]=str(exc)
+                continue
             before = memory.read(address,struct.calcsize(proof.fmt))
             target = proof.maximum
             maximum_before = None
@@ -111,6 +147,15 @@ class HuntFreezer:
                 except FieldProofChanged as exc:
                     errors[proof.key] = str(exc)
                     continue
+                if table_before is not None:
+                    try:
+                        latest,table_after=address_of(proof)
+                    except (ValueError,OSError) as exc:
+                        errors[proof.key]=str(exc)
+                        continue
+                    if latest!=address or table_after!=table_before:
+                        errors[proof.key]='Active-effects table moved; retrying.'
+                        continue
                 if maximum_before is not None and memory.read(hero['hero']+maximum.offset,8) != maximum_before:
                     errors[proof.key] = 'Maximum health changed; retrying.'
                     continue

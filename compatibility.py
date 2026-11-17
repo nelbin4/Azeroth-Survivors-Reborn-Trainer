@@ -84,37 +84,8 @@ def _resolve(path, size, modified, created, file_id, generation):
             signatures[text[2] + match.start()] = match.group()
             return match
 
-        signatures.update(config_anchors(code, text[2]))
-        # Independent RIP-relative readers must agree on the configuration block.
-        readers = defaultdict(list)
-        for rva, raw, target in rip_readers(code, text[2], 'byte'):
-            config = target - 0x208
-            if config % 8 == 0 and data[2] <= config and config + 0x234 <= data[2] + data[1]:
-                readers[config].append((rva, raw))
-        candidates = []
-        for config, values in readers.items():
-            if len(values) < 2:
-                continue
-            guards = {}
-            corroborated = set()
-            # Corroborate every candidate through independent initialization
-            # and clock-speed readers, regardless of register or alignment.
-            for offset, kind in ((0x230, 'integer'), (0x1F8, 'float')):
-                for rva, _ in values:
-                    start = max(0, rva - text[2] - 32)
-                    window = code[start:rva - text[2] + 0x140]
-                    for address, raw, target in rip_readers(window, text[2] + start, kind):
-                        if target == config + offset:
-                            guards[address] = raw
-                            corroborated.add(offset)
-            if corroborated != {0x230, 0x1F8}:
-                continue
-            candidates.append((config, values, guards))
-        if len(candidates) != 1:
-            raise ValueError(f'configuration readers do not identify a unique block (found {len(candidates)} verified blocks)')
-        config, values, guards = candidates[0]
-        signatures.update(values)
-        signatures.update(guards)
+        config, native_guards = discover_native_config(code, text, data)
+        signatures.update(native_guards)
         # The stats serializer independently establishes vector, index, stride,
         # and four contiguous 16-byte stat blocks. Capture relocations as guards.
         matches = stat_serializers(code, text[2])
@@ -214,3 +185,86 @@ def _resolve(path, size, modified, created, file_id, generation):
         return layout
     except (ValueError, StopIteration, struct.error, IndexError) as exc:
         raise RuntimeError(f'Unsupported Reborn build {digest[:12]}: {exc}. Memory controls are blocked.') from exc
+
+
+@dataclass
+class NativeLayout:
+    digest: str
+    config: int
+    signatures: dict
+
+
+def discover_native_config(code, text, data):
+    signatures = {}
+    signatures.update(config_anchors(code, text[2]))
+    # Independent RIP-relative readers must agree on the configuration block.
+    readers = defaultdict(list)
+    for rva, raw, target in rip_readers(code, text[2], 'byte'):
+        config = target - 0x208
+        if config % 8 == 0 and data[2] <= config and config + 0x234 <= data[2] + data[1]:
+            readers[config].append((rva, raw))
+    candidates = []
+    for config, values in readers.items():
+        if len(values) < 2:
+            continue
+        guards = {}
+        corroborated = set()
+        # Corroborate every candidate through independent initialization
+        # and clock-speed readers, regardless of register or alignment.
+        for offset, kind in ((0x230, 'integer'), (0x1F8, 'float')):
+            for rva, _ in values:
+                start = max(0, rva - text[2] - 32)
+                window = code[start:rva - text[2] + 0x140]
+                for address, raw, target in rip_readers(window, text[2] + start, kind):
+                    if target == config + offset:
+                        guards[address] = raw
+                        corroborated.add(offset)
+        if corroborated != {0x230, 0x1F8}:
+            continue
+        candidates.append((config, values, guards))
+    if len(candidates) != 1:
+        raise ValueError(f'configuration readers do not identify a unique block (found {len(candidates)} verified blocks)')
+    config, values, guards = candidates[0]
+    signatures.update(values)
+    signatures.update(guards)
+    return config, signatures
+
+
+_NATIVE_PROOFS = OrderedDict()
+
+
+def resolve_native(path):
+    path = Path(path).resolve()
+    before = path.stat()
+    blob = path.read_bytes()
+    digest = hashlib.sha256(blob).hexdigest()
+    after = path.stat()
+    fields = lambda s: (s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_ino)
+    if fields(before) != fields(after):
+        raise RuntimeError("Game image changed during native discovery.")
+    with _PROOF_LOCK:
+        if digest in _NATIVE_PROOFS:
+            _NATIVE_PROOFS.move_to_end(digest)
+            return _NATIVE_PROOFS[digest]
+    pe = struct.unpack_from("<I",blob,60)[0]
+    if blob[:2] != b"MZ" or blob[pe:pe+4] != b"PE\0\0" or struct.unpack_from("<H",blob,pe+4)[0] != 0x8664:
+        raise ValueError("Not a Windows x64 game image.")
+    optional=struct.unpack_from("<H",blob,pe+20)[0]
+    count=struct.unpack_from("<H",blob,pe+6)[0]
+    if not 1 <= count <= 96:
+        raise ValueError("Invalid game sections.")
+    sections=[struct.unpack_from("<8sIIII",blob,pe+24+optional+i*40) for i in range(count)]
+    text=next(s for s in sections if s[0].startswith(b".text"))
+    data=next(s for s in sections if s[0].startswith(b".data"))
+    code=blob[text[4]:text[4]+text[3]]
+    if len(code)!=text[3]:
+        raise ValueError("Truncated game image.")
+    config,guards=discover_native_config(code,text,data)
+    if fields(path.stat()) != fields(before):
+        raise RuntimeError("Game image changed during native discovery.")
+    result=NativeLayout(digest,config,guards)
+    with _PROOF_LOCK:
+        _NATIVE_PROOFS[digest]=result
+        while len(_NATIVE_PROOFS)>4:
+            _NATIVE_PROOFS.popitem(last=False)
+    return result

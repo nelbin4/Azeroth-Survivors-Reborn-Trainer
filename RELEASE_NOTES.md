@@ -1,21 +1,19 @@
-Incremental Max & Freeze for Azeroth Survivor Reborn Trainer v0.8.1.
+All combat stats and native Run options for Azeroth Survivor Reborn Trainer v0.8.2.
 
-- Adds enabled-by-default Max & freeze each verified stat as soon as it is found.
-- Applies independently proven fields without waiting for a complete player layout, while background discovery continues.
-- Holds verified fields every half-second and skips unchanged values.
-- Proves resource fields using named format arguments, concrete integer formatter widths and an independent serializer of the same player array.
-- Supports independent named Stats formatter evidence for additional combat fields.
-- Requires a complete initial search, stable observations of one solo owner, loaded-code guards and fresh ownership checks before writing.
-- Blocks unverified candidates, conflicting fields, changed code and stale owners. A field-specific proof failure does not block unrelated verified fields.
-- Uses the existing per-process writer lock and closes writable handles after each batch.
-- Displays MAX & FROZEN fields separately from raw candidates. Disabling freeze/Automatic Hunt stops writes and leaves current values in place; closing also leaves applied Hunt values in place.
-- 104 tests pass, including independent field discovery, typed/label proof rejection, incremental freezing, value races, cancellation, ownership changes, conflicting fields and unchanged-value suppression.
+- Discovers all 12 combat/utility fields from the newer compact named formatter, including damage reduction and flat regeneration.
+- Follows the copied Stats fields through bounded control-flow/data-flow analysis instead of assuming old offsets. Reordered fields work; conflicting origins are rejected.
+- Guards verified single-input math helpers and concrete integer formatter widths alongside the formatter code and labels.
+- Adds Echo chance up to 100% when its active-effects entry exists. Revalidates the current table, bucket, key and header; missing entries and rehashes skip Echo without blocking other fields. Does not insert effects or allocate game memory.
+- Discovers Run options independently from the full player layout. Clock speed, starting minute, bosses on the clock and native switches can work even when the old player-name formatter changes.
+- Shares the native trainer's process mutex and write gate with Hunt, avoiding competing writers while preserving configuration recovery.
+- Replaces the unavailable Find Hero action with View Hunt stats when the native-only connection is active.
+- Retains automatic background hunting and incremental max/freeze, with speed 3, next-run minute 20 and bosses on the clock as the run defaults.
+- 119 tests pass, including reordered compact fields, conflicting/unreachable branches, duplicate roles, partial overwrites, scalar widths, unary-helper validation, native-only configuration, Echo entries, absent effects and table rehash races.
 
-Live testing on d79ca7e2a239 applied and read back maximum/current health
-1,000,000, run gold 99,999,999 and rerolls 9,999. Its other combat/utility stat
-slots are still unverified, so they are not written. The full-layout Max all
-stats button remains blocked until the remaining mapping is proven.
+Live testing on d79ca7e2a239 applied all 12 combat/utility limits plus health,
+maximum health, run gold and rerolls. Native controls were independently read
+and the requested run defaults applied. Echo's active entry is conditional; it
+is held when present and remains pending when absent. The legacy full Player
+name contract is still unavailable, so this build uses Hunt for player holds.
 
-Retains run defaults (speed 3, next-run minute 20, bosses on the clock), the
-verified updater restart workflow, and earlier verified automatic layouts.
 Official game: https://azreborn.com/

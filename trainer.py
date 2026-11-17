@@ -23,10 +23,10 @@ import webbrowser
 
 import psutil
 from player import Player, STATS
-from compatibility import resolve
+from compatibility import resolve, resolve_native, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.8.1'
+VERSION = '0.8.2'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 JOURNAL = ROOT / 'reborn-recovery.json'
@@ -132,6 +132,7 @@ def atomic_json(path, data):
 
 class Trainer:
     def __init__(self, path=None, writable=True, journal=JOURNAL, session=None):
+        self.write_gate = threading.RLock()
         self.path = path
         self.memory = None
         self.process = None
@@ -148,7 +149,16 @@ class Trainer:
         self.process = games[0]
         self.created = self.process.create_time()
         self.path = self.process.exe()
-        self.profile = resolve(self.path)
+        try:
+            self.profile = resolve(self.path)
+        except RuntimeError as full_error:
+            if not str(full_error).startswith('Unsupported Reborn build'):
+                raise
+            try:
+                self.profile = resolve_native(self.path)
+            except Exception:
+                raise full_error
+        self.player_supported = isinstance(self.profile, Layout)
         self.build = self.profile.digest
         self.config_rva = self.profile.config
         self.signatures = self.profile.signatures
@@ -214,6 +224,10 @@ class Trainer:
         atomic_json(self.journal, dict(pid=pid, created=created, base=base, build=build, changes=self.changes))
 
     def set(self, key, value):
+        with getattr(self,'write_gate',threading.RLock()):
+            return self._set(key,value)
+
+    def _set(self, key, value):
         feature = FEATURES[key]
         if key == 'clock':
             value = float(value) * 60
@@ -237,6 +251,10 @@ class Trainer:
         logging.info('PID %s: %s = %s', self.process.pid, key, value)
 
     def restore(self):
+        with getattr(self,'write_gate',threading.RLock()):
+            return self._restore()
+
+    def _restore(self):
         self.guard()
         for key, change in list(self.changes.items()):
             self.guard()
@@ -251,6 +269,10 @@ class Trainer:
             self.persist()
 
     def close(self):
+        with getattr(self,'write_gate',threading.RLock()):
+            self._close()
+
+    def _close(self):
         if self.memory:
             self.memory.close()
             self.memory = None
@@ -378,7 +400,8 @@ def run_gui():
         saved = {}
 
     from value_hunt import add_hunt_tab
-    add_hunt_tab(root, tabs, lambda: launcher.session, lambda: closing, lambda: trainer is None)
+    hunt_tab = add_hunt_tab(root, tabs, lambda: launcher.session, lambda: closing,
+                            lambda: trainer is None or not trainer.player_supported, lambda: trainer)
 
     def error(exc):
         logging.exception('Trainer operation failed')
@@ -980,14 +1003,18 @@ def run_gui():
                     retry.reset()
                     saved['game_exe'] = trainer.path
                     atomic_json(SETTINGS, saved)
-                    status.set(f'Connected · PID {trainer.process.pid} · layout validated · {trainer.build[:12]}')
+                    status.set(f'Connected · PID {trainer.process.pid} · layout validated · {trainer.build[:12]}'
+                               if trainer.player_supported else 'Run options verified. Automatic Hunt is verifying and freezing player stats.')
+                    if not trainer.player_supported:
+                        hero_status.set('Player stats are managed by Automatic Hunt. Open Hunt values to view frozen fields.')
                     detail.set(trainer.path)
                     try:
                         run_defaults.apply(trainer)
                     except Exception as exc:
                         error(exc)
                     refresh_values()
-                    root.after(100, find_hero)
+                    if trainer.player_supported:
+                        root.after(100, find_hero)
         except queue.Empty:
             pass
         try:
@@ -1032,8 +1059,10 @@ def run_gui():
                 status.set(str(exc))
         for widget in widgets:
             widget.configure(state='normal' if trainer else 'disabled')
+        native_only = trainer is not None and not trainer.player_supported
         find_button.configure(state='normal' if trainer and not hero_searching else 'disabled')
-        find_button.configure(text='Finding Hero…' if hero_searching else 'Find Hero')
+        find_button.configure(text='View Hunt stats' if native_only else 'Finding Hero…' if hero_searching else 'Find Hero',
+                              command=(lambda: tabs.select(hunt_tab)) if native_only else find_hero)
         if player and player.lease:
             try:
                 show_hero(player.tick())

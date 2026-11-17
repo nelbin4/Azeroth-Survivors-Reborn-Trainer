@@ -109,7 +109,7 @@ class ValueHunt:
         return found
 
 
-def add_hunt_tab(root, tabs, session_provider, closing, needed=lambda: True):
+def add_hunt_tab(root, tabs, session_provider, closing, needed=lambda: True, native_provider=lambda:None):
     import queue
     import threading
     import tkinter as tk
@@ -121,7 +121,7 @@ def add_hunt_tab(root, tabs, session_provider, closing, needed=lambda: True):
     modes.pack(fill='both', expand=True)
     auto = ttk.Frame(modes, padding=12)
     modes.add(auto, text='Automatic')
-    add_automatic_panel(root, auto, session_provider, needed, closing)
+    add_automatic_panel(root, auto, session_provider, needed, closing, native_provider)
     frame = ttk.Frame(modes, padding=12)
     modes.add(frame, text='Advanced manual search')
     ttk.Label(frame, text='Hunt live values', font=('Segoe UI', 19, 'bold')).pack(anchor='w')

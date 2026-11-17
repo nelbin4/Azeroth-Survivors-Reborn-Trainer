@@ -63,7 +63,9 @@ class Player:
         self.xp_assist = False
         profile = getattr(trainer, 'profile', None)
         # Real trainers carry a resolved Layout; test doubles use legacy defaults.
-        from compatibility import Layout
+        from compatibility import Layout, NativeLayout
+        if isinstance(profile,NativeLayout) or getattr(trainer,'player_supported',True) is False:
+            raise RuntimeError('Full player layout is unavailable. Use verified Hunt fields.')
         self.profile = profile if isinstance(profile, Layout) else None
         self.stride = self.profile.stride if self.profile else STRIDE
         self.name_offset = self.profile.name if self.profile else NAME_OFFSET
