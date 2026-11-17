@@ -22,7 +22,7 @@ import psutil
 from compatibility import resolve, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.9.11'
+VERSION = '0.9.12'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 
@@ -187,14 +187,14 @@ def run_gui():
 
     root = tk.Tk()
     root.title(APP_NAME)
-    root.geometry('1200x860')
-    root.minsize(1100, 760)
+    root.geometry('1010x810')
+    root.resizable(False, False)
     root.configure(bg='#14202c')
     style = ttk.Style(root)
     style.theme_use('clam')
-    root.option_add('*Font', ('Segoe UI', 10))
+    root.option_add('*Font', ('Segoe UI', 11))
     style.configure('TFrame', background='#14202c')
-    style.configure('TLabel', background='#14202c', foreground='#e5e9ef')
+    style.configure('TLabel', font=('Segoe UI', 11), background='#14202c', foreground='#e5e9ef')
     style.configure('TCheckbutton', background='#14202c', foreground='#e5e9ef')
     style.map('TCheckbutton', background=[('active', '#203448')])
     style.configure('TButton', padding=(12, 7), background='#24364b', foreground='#e5e9ef', borderwidth=0)
@@ -202,9 +202,11 @@ def run_gui():
     style.configure('Accent.TButton', background='#56d6b0', foreground='#10251f', font=('Segoe UI', 10, 'bold'))
     style.map('Accent.TButton', background=[('active', '#7ce5c6'), ('disabled', '#263c3d')])
     style.configure('Find.TButton', background='#56d6b0', foreground='#10251f',
-                    font=('Segoe UI', 16, 'bold'), padding=(24, 12))
+                    font=('Segoe UI', 21, 'bold'), padding=(12, 15))
     style.map('Find.TButton', background=[('active', '#7ce5c6'), ('disabled', '#263c3d')],
               foreground=[('disabled', '#728399')])
+    style.configure('Horizontal.TProgressbar', troughcolor='#223548',
+                    background='#56d6b0', bordercolor='#223548', thickness=7)
     style.configure('TEntry', fieldbackground='#0c1826', foreground='#edf5ff', insertcolor='#edf5ff', padding=5)
     style.configure('TLabelframe', background='#14202c', bordercolor='#34475d', relief='solid')
     style.configure('TLabelframe.Label', background='#14202c', foreground='#76dfc1', font=('Segoe UI', 10, 'bold'))

@@ -1,7 +1,7 @@
 """Stats table and selected-stat editor."""
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import font, ttk
 
 from stats_controller import StatsController
 from stats_model import BY_KEY, VIEWS
@@ -18,61 +18,60 @@ class StatsPanel:
         self.progress_running = False
         self.controller = StatsController(root, session_provider, native_provider, closing, self.refresh)
 
-        top = ttk.Frame(parent, padding=(14, 12, 14, 8))
-        top.pack(fill='x')
-        search_controls = ttk.Frame(top)
-        search_controls.pack(side='left', anchor='n')
-        self.find_button = ttk.Button(search_controls, text='Find', width=13,
-                                      style='Find.TButton', command=self.toggle_search)
-        self.find_button.pack(fill='x')
-        self.search_progress = ttk.Progressbar(search_controls, mode='indeterminate',
-                                                orient='horizontal', maximum=100)
-        self.search_progress.pack(fill='x', pady=(5, 0))
-        feedback = ttk.Frame(top)
-        feedback.pack(side='left', padx=12)
-        self.summary = tk.StringVar()
-        ttk.Label(feedback, textvariable=self.summary, foreground='#76dfc1',
-                  wraplength=700).pack(anchor='w')
-        self.search_hint = tk.StringVar()
-        ttk.Label(feedback, textvariable=self.search_hint, foreground='#a9b8c8').pack(anchor='w')
+        workspace = ttk.Frame(parent, padding=(10, 10, 10, 12))
+        workspace.pack(fill='both', expand=True)
+        workspace.columnconfigure(0, weight=1)
+        workspace.columnconfigure(1, minsize=245)
+        workspace.rowconfigure(0, weight=1)
+        listing = ttk.Frame(workspace)
+        listing.grid(row=0, column=0, sticky='nsew')
+        editor = ttk.Frame(workspace, padding=(14, 0, 0, 0))
+        editor.grid(row=0, column=1, sticky='nsew')
 
-        toolbar = ttk.Frame(parent, padding=(14, 0, 14, 8))
+        self.find_button = ttk.Button(editor, text='Find', style='Find.TButton',
+                                      command=self.toggle_search)
+        self.find_button.pack(fill='x')
+        self.search_progress = ttk.Progressbar(editor, mode='indeterminate',
+                                               orient='horizontal', maximum=100)
+        self.search_progress.pack(fill='x', pady=(6, 8))
+        self.summary = tk.StringVar()
+        ttk.Label(editor, textvariable=self.summary, foreground='#76dfc1',
+                  wraplength=229).pack(anchor='w')
+        self.search_hint = tk.StringVar()
+        ttk.Label(editor, textvariable=self.search_hint, foreground='#a9b8c8',
+                  wraplength=229).pack(anchor='w')
+        ttk.Separator(editor).pack(fill='x', pady=12)
+
+        toolbar = ttk.Frame(listing, padding=(0, 0, 0, 9))
         toolbar.pack(fill='x')
         self.auto = tk.BooleanVar(value=True)
-        ttk.Style(root).configure('StatsAuto.TCheckbutton', font=('Segoe UI', 12))
         ttk.Checkbutton(toolbar, text='Auto max & freeze', variable=self.auto,
-                        command=self.change_auto, style='StatsAuto.TCheckbutton').pack(side='left')
+                        command=self.change_auto).pack(side='left')
         self.role_text = tk.StringVar()
-        ttk.Label(toolbar, textvariable=self.role_text).pack(side='left', padx=14)
+        ttk.Label(toolbar, textvariable=self.role_text, wraplength=130).pack(side='left', padx=10)
         self.pause = ttk.Button(toolbar, command=self.controller.pause)
         self.pause.pack(side='right')
         self.max_all = ttk.Button(toolbar, text='Max & freeze all', command=self.maximize)
-        self.max_all.pack(side='right', padx=8)
+        self.max_all.pack(side='right', padx=7)
 
-        workspace = ttk.Frame(parent, padding=(14, 0, 14, 12))
-        workspace.pack(fill='both', expand=True)
-        editor = ttk.Frame(workspace, padding=(18, 0, 0, 0), width=275)
-        editor.pack(side='right', fill='y')
-        listing = ttk.Frame(workspace)
-        listing.pack(side='left', fill='both', expand=True)
-        filters = ttk.Frame(listing)
-        filters.pack(fill='x', pady=(0, 6))
-        self.category = tk.StringVar(value='All')
-        for name in ('All', 'Offense', 'Defense', 'Utility', 'Resources'):
-            ttk.Radiobutton(filters, text=name, value=name, variable=self.category,
-                            command=self.filter_rows).pack(side='left', padx=(0, 8))
-
-        columns = ('stat', 'current', 'target', 'enabled', 'state')
-        self.table = ttk.Treeview(listing, columns=columns, show='headings', selectmode='browse')
+        columns = ('stat', 'current', 'target', 'state')
+        self.table = ttk.Treeview(listing, columns=columns, show='tree headings', selectmode='browse')
         style = ttk.Style(root)
+        self.row_font = font.Font(root=root, family='Segoe UI', size=12)
+        style.configure('Stats.Treeview.Heading', font=('Segoe UI', 11, 'bold'),
+                        background='#213243', foreground='#e7eef5', relief='flat', padding=(4, 4))
+        style.map('Stats.Treeview.Heading', background=[('active', '#293f54')])
         style.configure('Stats.Treeview', background='#14202c', fieldbackground='#14202c',
-                        foreground='#e5e9ef', rowheight=26)
+                        foreground='#e5e9ef', font=self.row_font,
+                        rowheight=max(30, self.row_font.metrics('linespace') + 8))
         style.map('Stats.Treeview', background=[('selected', '#23443f')],
                   foreground=[('selected', '#ffffff')])
         self.table.configure(style='Stats.Treeview')
-        for column, width, anchor in zip(columns, (185, 92, 98, 63, 104),
-                                         ('w', 'e', 'e', 'center', 'w')):
-            self.table.heading(column, text=column.title(), anchor=anchor)
+        self.table.heading('#0', text='Enabled', anchor='center')
+        self.table.column('#0', width=76, minwidth=76, stretch=False, anchor='center')
+        self.checkbox_images = {enabled: self.make_checkbox(enabled) for enabled in (False, True)}
+        for column, width, anchor in zip(columns, (175, 95, 105, 109), ('w', 'e', 'e', 'w')):
+            self.table.heading(column, text='Status' if column == 'state' else column.title(), anchor=anchor)
             self.table.column(column, width=width, minwidth=48, anchor=anchor, stretch=column == 'stat')
         for view in VIEWS:
             self.table.insert('', 'end', iid=view.key, values=(view.label,))
@@ -106,7 +105,7 @@ class StatsPanel:
                                        command=lambda: self.apply(self.editor_frozen.get()))
         self.apply_button.pack(side='left')
         self.maximum_button = ttk.Button(actions, text='Use maximum', command=self.use_maximum)
-        self.maximum_button.pack(side='left', padx=8)
+        self.maximum_button.pack(side='left', padx=(6, 0))
         self.help = tk.StringVar()
         self.error = tk.StringVar()
         ttk.Label(editor, textvariable=self.help, wraplength=228, foreground='#a9b8c8').pack(anchor='w', pady=(10, 0))
@@ -121,11 +120,21 @@ class StatsPanel:
         else:
             self.controller.find()
 
-    def filter_rows(self):
-        group = self.category.get()
-        visible = [view.key for view in VIEWS if group in ('All', view.group)]
-        self.table.set_children('', *visible)
-        self.select(self.selected if self.selected in visible else visible[0])
+    def make_checkbox(self, enabled):
+        image = tk.PhotoImage(master=self.root, width=24, height=24)
+        fill = '#56d6b0' if enabled else '#182838'
+        outline = '#56d6b0' if enabled else '#8299ac'
+        for y, inset in enumerate((4, 2, 1, 1) + (0,) * 16 + (1, 1, 2, 4)):
+            image.put(outline, to=(inset, y, 24-inset, y+1))
+            if 0 < y < 23:
+                inner = max(inset + 1, (2 if y in (1, 22) else 0))
+                image.put(fill, to=(inner, y, 24-inner, y+1))
+        if enabled:
+            for x, y in ((5, 12), (6, 13), (7, 14), (8, 15), (9, 16),
+                         (10, 15), (11, 14), (12, 13), (13, 12), (14, 11),
+                         (15, 10), (16, 9), (17, 8), (18, 7)):
+                image.put('#10251f', to=(x, y, x+2, y+2))
+        return image
 
     def selection_changed(self, _event):
         selection = self.table.selection()
@@ -152,7 +161,7 @@ class StatsPanel:
         self.error.set('')
 
     def toggle_row_enabled(self, event):
-        if self.table.identify_region(event.x, event.y) == 'cell' and self.table.identify_column(event.x) == '#4':
+        if self.table.identify_region(event.x, event.y) == 'tree' and self.table.identify_column(event.x) == '#0':
             key = self.table.identify_row(event.y)
             if key:
                 self.table.focus_set()
@@ -290,9 +299,10 @@ class StatsPanel:
                 state = 'Ready'
                 if frozen:
                     state = 'Frozen' if key in freeze.get('confirmed', {}) else 'Verifying'
-            values = (view.label, view.display(policy.values.get(key)), target, '☑' if enabled else '☐', state)
-            if tuple(self.table.item(key, 'values')) != values:
-                self.table.item(key, values=values)
+            values = (view.label, view.display(policy.values.get(key)), target, state)
+            image = str(self.checkbox_images[enabled])
+            if tuple(self.table.item(key, 'values')) != values or self.table.item(key, 'image') != (image,):
+                self.table.item(key, image=image, values=values)
 
         view = BY_KEY[self.selected]
         if not self.freeze_edited:

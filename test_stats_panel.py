@@ -48,15 +48,6 @@ class StatsPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.target.get(),'9999')
         self.assertEqual(self.panel.controller.policy.verified,{'damage'})
 
-    def test_filter_preserves_table_data_and_selects_a_visible_row(self):
-        self.panel.category.set('Resources')
-        self.panel.filter_rows()
-        self.assertEqual(self.panel.table.get_children(), ('run_gold', 'rerolls'))
-        self.assertEqual(self.panel.selected, 'run_gold')
-        self.panel.category.set('All')
-        self.panel.filter_rows()
-        self.assertEqual(len(self.panel.table.get_children()), 17)
-
     def test_host_indicator_tracks_verified_role(self):
         self.panel.controller.role = 'host'
         self.panel.refresh()
@@ -101,11 +92,11 @@ class StatsPanelTests(unittest.TestCase):
         self.assertIsNone(self.panel.search_started)
 
     def test_toggle_checkbox_for_a_stat_before_hunt_finds_it(self):
-        self.assertEqual(self.panel.table.set('damage', 'enabled'), '☑')
+        self.assertEqual(self.panel.table.item('damage', 'image'), (str(self.panel.checkbox_images[True]),))
         self.panel.toggle_selected_enabled(None)
-        self.assertEqual(self.panel.table.set('damage', 'enabled'), '☐')
+        self.assertEqual(self.panel.table.item('damage', 'image'), (str(self.panel.checkbox_images[False]),))
         self.assertEqual(self.panel.table.set('damage', 'state'), 'Disabled')
         self.assertTrue(self.panel.apply_button.instate(['disabled']))
         self.panel.toggle_selected_enabled(None)
-        self.assertEqual(self.panel.table.set('damage', 'enabled'), '☑')
+        self.assertEqual(self.panel.table.item('damage', 'image'), (str(self.panel.checkbox_images[True]),))
         self.assertTrue(self.panel.apply_button.instate(['!disabled']))

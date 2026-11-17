@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.9.11
+# Azeroth Survivor Reborn Trainer 0.9.12
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -41,7 +41,7 @@ leaves the game running.
 ## Stats interface and recovery
 
 **Stats** shows current values, targets, freeze settings and status in one
-table. Filter by category and select a row to edit it in the side panel.
+table. Select a row to edit it in the side panel. All stats are shown in one table.
 Click a row’s **Enabled** checkbox or press Space on that row. Unchecked stats remain visible and are excluded from Auto max, Max & freeze all, and individual writes. **Keep frozen** in the editor controls whether an enabled stat holds its target.
 
 **Find** becomes available after the trainer connects to the selected game process. It starts background discovery. The progress bar and elapsed timer show when Hunt is working. A first search typically takes 1–3 minutes. **Stop search** stops finding new

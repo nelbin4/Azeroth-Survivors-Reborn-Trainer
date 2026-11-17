@@ -1,4 +1,5 @@
-Azeroth Survivor Reborn Trainer v0.9.11
+Azeroth Survivor Reborn Trainer v0.9.12
 
-- Add an Enabled checkbox to each stat. Unchecked stats remain visible and are excluded from all stat writes and bulk max actions.
-- Toggle a stat by clicking its checkbox or pressing Space on its row. Keep frozen remains available in the stat editor.
+- Move larger checkbox blocks to the left of every stat row and remove the category filters.
+- Move Find, Stop search, progress and status above the right-side editor.
+- Use a narrower fixed-size window with larger text.
