@@ -32,6 +32,8 @@ def stacks(process, memory):
             info = ThreadInfo()
             if query(handle, 0, ctypes.byref(info), ctypes.sizeof(info), None) != 0:
                 continue
+            if not info.teb:
+                continue
             top, bottom = struct.unpack('<2Q', memory.read(info.teb + 8, 16))
             if 0 < top - bottom <= 16 * 1024 * 1024:
                 yield thread.id, bottom, top

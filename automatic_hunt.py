@@ -103,7 +103,7 @@ class AutomaticHunt:
             self.reset()
             self.session = session
         stamp = file_identity(session.path)
-        if self.plan is None or self.stamp != stamp:
+        if self.plan is None or self.stamp != stamp or self.base is None:
             if self.stamp == stamp and self.plan_error:
                 raise RuntimeError(self.plan_error)
             self.reset()

@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.8.2
+# Azeroth Survivor Reborn Trainer 0.8.3
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and

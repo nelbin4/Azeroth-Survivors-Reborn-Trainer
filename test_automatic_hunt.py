@@ -133,6 +133,13 @@ class AutomaticHuntTests(unittest.TestCase):
         self.assertEqual(schedule.delay(empty),2)
         self.assertEqual(schedule.delay(dict(heroes=[{}],partial=False)),2)
 
+    def test_interrupted_plan_capture_retries_module_resolution(self):
+        self.session.process=Mock(side_effect=[self.process,RuntimeError('temporarily unavailable'),self.process])
+        with self.assertRaisesRegex(RuntimeError,'temporarily unavailable'):self.step()
+        self.assertIsNone(self.hunt.base)
+        self.session.process=Mock(return_value=self.process)
+        self.assertEqual(len(self.step()['heroes']),1)
+
     def test_new_process_or_hero_identity_discards_temporal_history(self):
         self.step()
         struct.pack_into('<Q',self.hero,0xF0,92)
