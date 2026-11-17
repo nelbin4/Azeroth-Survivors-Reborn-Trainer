@@ -74,3 +74,20 @@ class StatsPolicyTests(unittest.TestCase):
         policy.paused = False
         policy.auto = False
         self.assertFalse(policy.request()['auto_keys'])
+
+    def test_disabled_stat_is_excluded_from_auto_bulk_and_queued_writes(self):
+        policy = StatsPolicy()
+        policy.searching = True
+        policy.accept('hero', {'damage': 7, 'armor': 3})
+        policy.set_target('damage', 125, freeze=True)
+        policy.set_enabled('damage', False)
+        policy.maximize()
+        request = policy.request()
+        self.assertEqual(policy.targets['damage'], 125)
+        self.assertEqual(policy.values['damage'], 7)
+        self.assertNotIn('damage', request['keys'] | request['auto_keys'] | request['pending'])
+        self.assertIn('armor', request['keys'])
+        with self.assertRaises(ValueError):
+            policy.set_target('damage', 50)
+        policy.set_enabled('damage', True)
+        self.assertIn('damage', policy.request()['keys'])

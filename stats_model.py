@@ -51,6 +51,7 @@ BY_KEY={view.key:view for view in VIEWS}
 class StatsPolicy:
     def __init__(self):
         self.targets={v.key:v.maximum for v in VIEWS}
+        self.enabled = set(BY_KEY)
         self.holds=set()
         self.overrides=set()
         self.pending=set()
@@ -70,12 +71,14 @@ class StatsPolicy:
             self.values.clear()
         new=set(values)-self.verified
         if self.auto:
-            self.holds.update(new-self.overrides)
+            self.holds.update((new & self.enabled) - self.overrides)
         self.verified=set(values)
         self.values=dict(values)
 
     def set_target(self,key,value,freeze=False,apply=True):
         view=BY_KEY[key]
+        if key not in self.enabled:
+            raise ValueError('Enable this stat before applying a target.')
         view.native(value)
         self.targets[key]=view.maximum if key=='health' else int(float(value))
         self.freeze(key, freeze)
@@ -88,17 +91,27 @@ class StatsPolicy:
             self.pending.discard(key)
         self.overrides.add(key)
 
+    def set_enabled(self, key, enabled):
+        if enabled:
+            self.enabled.add(key)
+            if self.auto and key in self.verified and key not in self.overrides:
+                self.holds.add(key)
+        else:
+            self.enabled.discard(key)
+            self.pending.discard(key)
+
     def maximize(self):
-        self.targets={v.key:v.maximum for v in VIEWS}
-        self.holds=set(BY_KEY)
-        self.overrides=set(BY_KEY)
-        self.pending.update(self.verified)
-        self.paused=False
+        for key in self.enabled:
+            self.targets[key] = BY_KEY[key].maximum
+        self.holds.update(self.enabled)
+        self.overrides.update(self.enabled)
+        self.pending.update(self.verified & self.enabled)
+        self.paused = False
 
     def request(self):
-        automatic = set(BY_KEY) - self.overrides if self.auto and self.searching and not self.paused else set()
+        automatic = self.enabled - self.overrides if self.auto and self.searching and not self.paused else set()
         return dict(auto_keys=automatic,
                     targets={k:BY_KEY[k].native(v) for k,v in self.targets.items() if k!='health'},
-                    keys=set() if self.paused else set(self.holds|self.pending),
+                    keys=set() if self.paused else (self.holds | self.pending) & self.enabled,
                     pending=set(self.pending),discover=self.searching,paused=self.paused,
                     xp=self.xp and not self.paused,xp_once=self.xp_once and not self.paused)

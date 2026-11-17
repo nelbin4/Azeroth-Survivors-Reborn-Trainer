@@ -99,3 +99,13 @@ class StatsPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.search_hint.get(), '')
         self.assertEqual(float(self.panel.search_progress['value']), 0)
         self.assertIsNone(self.panel.search_started)
+
+    def test_toggle_checkbox_for_a_stat_before_hunt_finds_it(self):
+        self.assertEqual(self.panel.table.set('damage', 'enabled'), '☑')
+        self.panel.toggle_selected_enabled(None)
+        self.assertEqual(self.panel.table.set('damage', 'enabled'), '☐')
+        self.assertEqual(self.panel.table.set('damage', 'state'), 'Disabled')
+        self.assertTrue(self.panel.apply_button.instate(['disabled']))
+        self.panel.toggle_selected_enabled(None)
+        self.assertEqual(self.panel.table.set('damage', 'enabled'), '☑')
+        self.assertTrue(self.panel.apply_button.instate(['!disabled']))

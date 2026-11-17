@@ -1,4 +1,4 @@
-Azeroth Survivor Reborn Trainer v0.9.10
+Azeroth Survivor Reborn Trainer v0.9.11
 
-- Remove the Saves tab, save backup action, and permanent progression editor. Existing saves and backups stay on disk.
-- Show Stats directly in the main window.
+- Add an Enabled checkbox to each stat. Unchecked stats remain visible and are excluded from all stat writes and bulk max actions.
+- Toggle a stat by clicking its checkbox or pressing Space on its row. Keep frozen remains available in the stat editor.

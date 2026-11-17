@@ -62,7 +62,7 @@ class StatsPanel:
             ttk.Radiobutton(filters, text=name, value=name, variable=self.category,
                             command=self.filter_rows).pack(side='left', padx=(0, 8))
 
-        columns = ('stat', 'current', 'target', 'freeze', 'state')
+        columns = ('stat', 'current', 'target', 'enabled', 'state')
         self.table = ttk.Treeview(listing, columns=columns, show='headings', selectmode='browse')
         style = ttk.Style(root)
         style.configure('Stats.Treeview', background='#14202c', fieldbackground='#14202c',
@@ -81,8 +81,8 @@ class StatsPanel:
         self.table.configure(yscrollcommand=scroll.set)
         self.table.pack(side='left', fill='both', expand=True)
         self.table.bind('<<TreeviewSelect>>', self.selection_changed)
-        self.table.bind('<Button-1>', self.toggle_row_freeze)
-        self.table.bind('<space>', self.toggle_selected_freeze)
+        self.table.bind('<Button-1>', self.toggle_row_enabled)
+        self.table.bind('<space>', self.toggle_selected_enabled)
 
         self.title = tk.StringVar()
         ttk.Label(editor, textvariable=self.title, font=('Segoe UI', 14, 'bold'), wraplength=235).pack(anchor='w')
@@ -105,7 +105,8 @@ class StatsPanel:
         self.apply_button = ttk.Button(actions, style='Accent.TButton',
                                        command=lambda: self.apply(self.editor_frozen.get()))
         self.apply_button.pack(side='left')
-        ttk.Button(actions, text='Use maximum', command=self.use_maximum).pack(side='left', padx=8)
+        self.maximum_button = ttk.Button(actions, text='Use maximum', command=self.use_maximum)
+        self.maximum_button.pack(side='left', padx=8)
         self.help = tk.StringVar()
         self.error = tk.StringVar()
         ttk.Label(editor, textvariable=self.help, wraplength=228, foreground='#a9b8c8').pack(anchor='w', pady=(10, 0))
@@ -150,21 +151,19 @@ class StatsPanel:
         self.editor_frozen.set(self.selected in policy.holds)
         self.error.set('')
 
-    def toggle_row_freeze(self, event):
+    def toggle_row_enabled(self, event):
         if self.table.identify_region(event.x, event.y) == 'cell' and self.table.identify_column(event.x) == '#4':
             key = self.table.identify_row(event.y)
             if key:
+                self.table.focus_set()
                 self.select(key)
-                return self.toggle_selected_freeze(event)
+                return self.toggle_selected_enabled(event)
 
-    def toggle_selected_freeze(self, _event):
+    def toggle_selected_enabled(self, _event):
         policy = self.controller.policy
-        if self.selected in policy.verified:
-            enabled = self.selected not in policy.holds
-            self.freeze_edited = False
-            self.editor_frozen.set(enabled)
-            policy.freeze(self.selected, enabled)
-            self.controller.changed()
+        policy.set_enabled(self.selected, self.selected not in policy.enabled)
+        self.error.set('')
+        self.controller.changed()
         return 'break'
 
     def change_auto(self):
@@ -276,7 +275,10 @@ class StatsPanel:
             if key == 'max_health':
                 target = '≥ ' + target
             state = 'Searching' if policy.searching else 'Not found'
-            if read_only and known:
+            enabled = key in policy.enabled
+            if not enabled:
+                state = 'Disabled'
+            elif read_only and known:
                 state = 'Checking role' if controller.role == 'unknown' else 'Read-only'
             elif policy.paused and (frozen or key in policy.pending):
                 state = 'Paused'
@@ -288,7 +290,7 @@ class StatsPanel:
                 state = 'Ready'
                 if frozen:
                     state = 'Frozen' if key in freeze.get('confirmed', {}) else 'Verifying'
-            values = (view.label, view.display(policy.values.get(key)), target, 'On' if frozen else 'Off', state)
+            values = (view.label, view.display(policy.values.get(key)), target, '☑' if enabled else '☐', state)
             if tuple(self.table.item(key, 'values')) != values:
                 self.table.item(key, values=values)
 
@@ -298,11 +300,17 @@ class StatsPanel:
         self.title.set(view.label)
         self.live.set(view.display(policy.values.get(view.key)))
         self.target_label.set('Target' + (f' ({view.unit})' if view.unit else ''))
-        self.entry.configure(state='disabled' if view.key == 'health' else 'normal')
+        enabled = view.key in policy.enabled
+        self.entry.configure(state='normal' if enabled and view.key != 'health' else 'disabled')
+        self.editor_check.configure(state='normal' if enabled else 'disabled')
+        self.maximum_button.configure(state='normal' if enabled else 'disabled')
         self.help.set(freeze.get('errors', {}).get(view.key) or view.note
                       or f'Range {view.minimum:,}–{view.maximum:,}{view.unit}')
+        if not enabled:
+            self.help.set('Check Enabled in the table to apply a target.')
         can_apply = view.key in policy.verified and not (policy.paused or read_only)
-        self.apply_button.configure(text='Apply' if can_apply else 'Queue target')
+        self.apply_button.configure(text='Apply' if can_apply else 'Queue target',
+                                    state='normal' if enabled else 'disabled')
 
         if self.advanced is not None and self.advanced.winfo_exists():
             xp_available = bool(last.get('xp_available'))
