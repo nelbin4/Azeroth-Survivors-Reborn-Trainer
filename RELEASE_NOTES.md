@@ -1,18 +1,20 @@
-Automatic background Hunt for Azeroth Survivor Reborn Trainer v0.8.0.
+Incremental Max & Freeze for Azeroth Survivor Reborn Trainer v0.8.1.
 
-- Automatically hunts candidate live values when normal layout detection is unavailable, without entering values or clicking Search.
-- Runs in the background across tabs and keeps the game running, without switching tabs or taking focus.
-- Independently identifies the player-array search region through code, validates the loaded instructions and rechecks candidate ownership.
-- Uses bounded stack searches, automatic continuation, temporal comparisons, cached code searches and retry backoff.
-- Revalidates process identity, resets on process changes, and pauses when normal detection is ready.
-- Keeps exact-value search/refine/continue tools in the optional Advanced manual search subtab.
-- Hunt opens the game read-only. Matching values never automatically enable writes or become trusted stat mappings.
-- 92 automated tests pass, including automatic candidate discovery without input, changing live values, stale ownership, process reuse, hero changes, ambiguous allocations, cancellation, scan continuation, changed code, cached failures and retry timing.
+- Adds enabled-by-default Max & freeze each verified stat as soon as it is found.
+- Applies independently proven fields without waiting for a complete player layout, while background discovery continues.
+- Holds verified fields every half-second and skips unchanged values.
+- Proves resource fields using named format arguments, concrete integer formatter widths and an independent serializer of the same player array.
+- Supports independent named Stats formatter evidence for additional combat fields.
+- Requires a complete initial search, stable observations of one solo owner, loaded-code guards and fresh ownership checks before writing.
+- Blocks unverified candidates, conflicting fields, changed code and stale owners. A field-specific proof failure does not block unrelated verified fields.
+- Uses the existing per-process writer lock and closes writable handles after each batch.
+- Displays MAX & FROZEN fields separately from raw candidates. Disabling freeze/Automatic Hunt stops writes and leaves current values in place; closing also leaves applied Hunt values in place.
+- 104 tests pass, including independent field discovery, typed/label proof rejection, incremental freezing, value races, cancellation, ownership changes, conflicting fields and unchanged-value suppression.
 
-Live read-only testing automatically found candidate live health and stat values
-in the running d79ca7e2a239 build. Its full named player layout is still unverified: Max all
-stats and other mapped memory writes remain blocked on that build. This release
-adds actual value searching, not a claim of universal future-version support.
+Live testing on d79ca7e2a239 applied and read back maximum/current health
+1,000,000, run gold 99,999,999 and rerolls 9,999. Its other combat/utility stat
+slots are still unverified, so they are not written. The full-layout Max all
+stats button remains blocked until the remaining mapping is proven.
 
 Retains run defaults (speed 3, next-run minute 20, bosses on the clock), the
 verified updater restart workflow, and earlier verified automatic layouts.

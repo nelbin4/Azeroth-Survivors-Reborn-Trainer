@@ -1,7 +1,8 @@
 """Automatic, read-only discovery of live values when the full layout is unknown.
 
 The array serializer establishes a search region, not named writable fields.
-None of the evidence or numeric candidates in this module authorizes writes.
+Array/numeric candidates cannot authorize writes. Separate named field proofs
+may authorize the guarded incremental writer in hunt_freeze.
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ import time
 
 from code_search import stat_serializers
 from stack_probe import stacks
+from hunt_fields import discover_fields
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,7 @@ class SearchPlan:
     stats: int
     rva: int
     guard: bytes
+    fields: tuple = ()
 
 
 def file_identity(path):
@@ -56,8 +59,11 @@ def make_plan(path):
         raise ValueError('Hunt array bounds are inconsistent.')
     if before != file_identity(path):
         raise RuntimeError('Game image changed during Hunt discovery.')
+    fields = discover_fields(blob,sections,code,text[2],match.array,match.value)
+    if before != file_identity(path):
+        raise RuntimeError('Game image changed during field discovery.')
     return SearchPlan(hashlib.sha256(blob).hexdigest(), pointer - 8, index, stride,
-                      match.value, match.rva, match.raw), before
+                      match.value, match.rva, match.raw, fields), before
 
 
 def health_candidates(raw):
@@ -218,7 +224,9 @@ class AutomaticHunt:
                 if old and offset in old['pairs'] and old['pairs'][offset][1] == pair[1]:
                     comparisons[offset] = 'changed' if pair[0] != old['pairs'][offset][0] else 'stable'
             slots = struct.unpack_from('<16I', raw, plan.stats)
-            heroes.append(dict(hero=pointer, identity=identity, pairs=pairs, comparisons=comparisons, slots=slots))
+            heroes.append(dict(hero=pointer, game=item['game'], identity=identity,
+                               level=struct.unpack_from('<I',raw,0x150)[0],
+                               pairs=pairs, comparisons=comparisons, slots=slots))
         self.previous = {h['hero']: h for h in heroes}
         self.leases = [item['game'] for item in found.values()]
         return dict(build=plan.digest[:12], heroes=heroes, examined=examined, partial=partial,
@@ -233,7 +241,7 @@ class HuntSchedule:
     def delay(self, result):
         if not isinstance(result, Exception) and (result['heroes'] or result['partial']):
             self.failures = 0
-            return 2 if result['heroes'] else 0.75
+            return .5 if result.get('freeze',{}).get('held') else 2 if result['heroes'] else 0.75
         self.failures += 1
         return min(15, 2 ** min(self.failures, 4))
 
@@ -243,21 +251,25 @@ def add_automatic_panel(root, parent, session_provider, needed, closing):
     import threading
     import tkinter as tk
     from tkinter import ttk
+    from hunt_freeze import HuntFreezer
 
     frame = ttk.Frame(parent)
     frame.pack(fill='both', expand=True)
     ttk.Label(frame, text='Automatic background Hunt', font=('Segoe UI', 19, 'bold')).pack(anchor='w')
     enabled = tk.BooleanVar(value=True)
     ttk.Checkbutton(frame, text='Hunt automatically when normal detection is unavailable', variable=enabled).pack(anchor='w', pady=10)
+    freeze = tk.BooleanVar(value=True)
+    ttk.Checkbutton(frame, text='Max & freeze each verified stat as soon as it is found', variable=freeze).pack(anchor='w', pady=(0,10))
     ttk.Label(frame, text='No values to enter. Hunt follows code-identified player arrays, searches live integer pairs and '
-              'compares snapshots while you play. Candidate values remain read-only until their stat meanings are verified.',
+              'compares snapshots while you play. Each independently verified stat is maximized and held while Hunt continues. '
+              'Unmapped numeric candidates remain read-only. Turning freeze off stops writes and leaves current values in place.',
               wraplength=1020).pack(anchor='w')
     status = tk.StringVar(value='Waiting for the selected game process…')
     ttk.Label(frame, textvariable=status, wraplength=1020, foreground='#76dfc1').pack(anchor='w', pady=12)
     output = tk.Text(frame, height=9, bg='#0c1826', fg='#e5e9ef', state='disabled')
     output.pack(fill='both', expand=True)
     results = queue.Queue()
-    hunt, schedule = AutomaticHunt(), HuntSchedule()
+    hunt, schedule, freezer = AutomaticHunt(), HuntSchedule(), HuntFreezer()
     busy = False
     next_scan = 0
     active = None
@@ -274,7 +286,8 @@ def add_automatic_panel(root, parent, session_provider, needed, closing):
             run = bool(enabled.get() and needed() and session)
         except Exception:
             session, run = None, False
-        identity = session if run else None
+        freeze_requested = freeze.get()
+        identity = (session,freeze_requested) if run else None
         if identity != active:
             generation += 1
             active = identity
@@ -299,6 +312,16 @@ def add_automatic_panel(root, parent, session_provider, needed, closing):
                              'No solo player array yet; waiting for a run.')
                     status.set(f"PID {session.pid} · build {result['build']} · {state}")
                     lines = []
+                    frozen = result.get('freeze',{})
+                    for key,target in frozen.get('held',{}).items():
+                        lines.append(f'MAX & FROZEN · {key.replace("_"," ")} · {target:,}')
+                    for key,message in frozen.get('errors',{}).items():
+                        lines.append(f'Waiting · {key.replace("_"," ")} · {message}')
+                    if frozen.get('message'):
+                        lines.append(frozen['message'])
+                    if frozen.get('held'):
+                        status.set(f"PID {session.pid} · {len(frozen['held'])} stats maxed & frozen · hunting remaining fields.")
+                    lines.append('')
                     for hero in heroes:
                         lines.append(f"Player-array candidate 0x{hero['hero']:016X}")
                         lines.append('16 raw stat slots (names unverified): ' + ', '.join(map(str, hero['slots'])))
@@ -321,14 +344,35 @@ def add_automatic_panel(root, parent, session_provider, needed, closing):
             token = generation
             status.set(f'Automatic Hunt scanning in background · PID {session.pid}…')
             def work():
-                from trainer import Memory
+                from trainer import Memory, InstanceLock
                 memory = None
+                writable = None
+                lock = None
                 try:
                     memory = Memory(session.pid, writable=False)
-                    result = hunt.step(session, memory, cancelled=lambda: stop.is_set() or closing())
+                    cancelled = lambda: stop.is_set() or closing()
+                    result = hunt.step(session, memory, cancelled=cancelled)
+                    if freeze_requested and not cancelled():
+                        fields = freezer.observe(hunt,result)
+                        if fields:
+                            try:
+                                lock = InstanceLock(f'{session.pid}_{session.created}')
+                                writable = Memory(session.pid,writable=True)
+                                result['freeze'] = freezer.apply(hunt,result,writable,fields,cancelled)
+                            except Exception as exc:
+                                result['freeze'] = dict(message=f'Freeze paused: {exc}')
+                        else:
+                            result['freeze'] = dict(message='Waiting for independently verified fields and stable solo ownership.')
+                    else:
+                        freezer.reset()
                 except Exception as exc:
+                    freezer.reset()
                     result = exc
                 finally:
+                    if writable:
+                        writable.close()
+                    if lock:
+                        lock.close()
                     if memory:
                         memory.close()
                 results.put((token, result))

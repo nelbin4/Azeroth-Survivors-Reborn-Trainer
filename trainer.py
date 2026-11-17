@@ -26,7 +26,7 @@ from player import Player, STATS
 from compatibility import resolve
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.8.0'
+VERSION = '0.8.1'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 JOURNAL = ROOT / 'reborn-recovery.json'
@@ -963,8 +963,11 @@ def run_gui():
             elif isinstance(result, Exception):
                 connecting = False
                 retry.failed(time.monotonic())
-                status.set(str(result) + (' Automatic Hunt is running in the background.'
-                           if 'Memory controls are blocked' in str(result) else ''))
+                if 'Memory controls are blocked' in str(result):
+                    logging.warning('Full layout discovery: %s',result)
+                    status.set('Full layout unavailable for this build. Open Hunt values for automatic discovery and verified stat holds.')
+                else:
+                    status.set(str(result))
             else:
                 connecting = False
                 selected = launcher.session

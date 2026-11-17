@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.8.0
+# Azeroth Survivor Reborn Trainer 0.8.1
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -88,18 +88,36 @@ or buttons to press. It keeps running when another tab is selected, without
 switching tabs or taking focus from the game. It pauses when normal detection
 is ready, and discards stale results after process changes.
 
+**Max & freeze each verified stat as soon as it is found** is enabled by default.
+After a complete initial search and two stable observations of one solo owner,
+each independently proven field is maximized and held without waiting for the
+remaining fields. Holds run every half-second and skip unchanged values. Search
+continues while established holds remain active. Uncheck this option or pause
+Automatic Hunt to stop writes; values already applied stay in place, including
+when the trainer closes. Hunt does not add changes to the normal Restore journal.
+
+The running `d79ca7e2a239` build independently proves maximum health, current
+health, run gold and rerolls through the named resource formatter, its integer
+formatter widths, and a second serializer using the same player array. These
+fields can be maxed while the combat/utility slots are still unmapped. A named
+Stats formatter can independently prove additional combat fields on other builds.
+Numeric matches alone never enable writes. The panel lists actual held fields
+separately from unverified value candidates.
+
 Hunt independently finds the player-array serializer in the game executable,
 checks those instructions in the loaded image, and searches thread stacks for
 candidate solo array owners. It hunts integer value pairs and stat-block values
 inside candidate allocations, then compares successive snapshots. Shared health
 header and integer-stat plausibility bounds narrow candidates; these heuristics
-do not establish named stat mappings. Changed types/headers can require detector
+do not establish named stat mappings. Independent per-field code evidence is
+required before each write. Changed types/headers can require detector
 updates. The current array-search strategy still requires a unique code anchor.
 
 Stack searches run in bounded background rounds (up to 8 MiB of stack content,
 with a 0.3-second scheduling target and bounded candidate probes). Partial rounds
 resume automatically. Located roots are revalidated and sampled every two seconds;
-full discovery repeats periodically. Missing heroes/errors retry with delays up
+full discovery repeats periodically. Active freezes run at half-second intervals.
+Missing heroes/errors retry with delays up
 to 15 seconds. Unchanged failed code searches are cached until the image changes.
 Cancellation and process identity are checked throughout the search.
 
@@ -116,11 +134,14 @@ the candidates already found. A candidate limit requires refinement or a more
 distinctive value. Results show up to 500 addresses. Searches run in the
 background and validate the PID, creation time and executable path.
 
-Hunt is read-only. A numeric match, even a single one, does not establish that it
-is the authoritative player field. Hunt does not enable automatic stat writes,
-save addresses across game sessions, or change saves. The `d79ca7e2a239` build
-has been tested with automatic background candidate discovery; its full named
-player mapping remains unverified. Automatic Hunt does not unlock Max all stats.
+Manual searches and unmapped candidates are read-only. A numeric match, even a
+single one, does not establish an authoritative player field. Verified Hunt
+freezes recheck executable identity, loaded code, the selected process, solo
+ownership, hero identity and level before writes. A field-specific proof failure
+skips that field; ownership changes stop the batch. A per-process writer lock
+prevents competing trainers from writing at once. No addresses are saved across
+sessions and Hunt does not edit saves. The full named player mapping on
+`d79ca7e2a239` remains incomplete; Hunt does not unlock its full Max all stats button.
 
 ### Automatic player mapping
 
