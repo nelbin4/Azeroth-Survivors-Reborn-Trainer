@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.7.1
+# Azeroth Survivor Reborn Trainer 0.8.0
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Live controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -79,6 +79,50 @@ the error and open the trainer executable normally once. The downloaded binary
 is intact; v0.6.4 fixes subsequent update restarts.
 
 ## Update compatibility
+
+### Hunt values on an unsupported build
+
+**Automatic background Hunt** is enabled by default. When normal detection is
+unavailable, it starts with the selected game process, without values to enter
+or buttons to press. It keeps running when another tab is selected, without
+switching tabs or taking focus from the game. It pauses when normal detection
+is ready, and discards stale results after process changes.
+
+Hunt independently finds the player-array serializer in the game executable,
+checks those instructions in the loaded image, and searches thread stacks for
+candidate solo array owners. It hunts integer value pairs and stat-block values
+inside candidate allocations, then compares successive snapshots. Shared health
+header and integer-stat plausibility bounds narrow candidates; these heuristics
+do not establish named stat mappings. Changed types/headers can require detector
+updates. The current array-search strategy still requires a unique code anchor.
+
+Stack searches run in bounded background rounds (up to 8 MiB of stack content,
+with a 0.3-second scheduling target and bounded candidate probes). Partial rounds
+resume automatically. Located roots are revalidated and sampled every two seconds;
+full discovery repeats periodically. Missing heroes/errors retry with delays up
+to 15 seconds. Unchanged failed code searches are cached until the image changes.
+Cancellation and process identity are checked throughout the search.
+
+The optional **Advanced manual search** subtab retains exact-value searching.
+Select **64-bit integer** for known integer health, enter its current displayed
+value, and click **New hunt**. When it changes, enter the new value and refine.
+Use **32-bit integer** for known integer bonuses or run gold. Types can change
+between game versions; manual searching is not required by Automatic Hunt.
+
+Each manual search examines up to 256 MiB of readable private memory and retains at most
+4,096 aligned candidates. **Continue hunt** examines the next portion using the
+same value. A changing value may require a new search; refinement only checks
+the candidates already found. A candidate limit requires refinement or a more
+distinctive value. Results show up to 500 addresses. Searches run in the
+background and validate the PID, creation time and executable path.
+
+Hunt is read-only. A numeric match, even a single one, does not establish that it
+is the authoritative player field. Hunt does not enable automatic stat writes,
+save addresses across game sessions, or change saves. The `d79ca7e2a239` build
+has been tested with automatic background candidate discovery; its full named
+player mapping remains unverified. Automatic Hunt does not unlock Max all stats.
+
+### Automatic player mapping
 
 The trainer derives the 12 combat/utility stat fields from their actual names in the
 game's Stats formatter, confirms their 32-bit integer types, and independently

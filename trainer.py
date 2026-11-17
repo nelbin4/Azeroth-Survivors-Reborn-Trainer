@@ -26,7 +26,7 @@ from player import Player, STATS
 from compatibility import resolve
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.7.1'
+VERSION = '0.8.0'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 JOURNAL = ROOT / 'reborn-recovery.json'
@@ -376,6 +376,9 @@ def run_gui():
         saved = json.loads(SETTINGS.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         saved = {}
+
+    from value_hunt import add_hunt_tab
+    add_hunt_tab(root, tabs, lambda: launcher.session, lambda: closing, lambda: trainer is None)
 
     def error(exc):
         logging.exception('Trainer operation failed')
@@ -960,7 +963,8 @@ def run_gui():
             elif isinstance(result, Exception):
                 connecting = False
                 retry.failed(time.monotonic())
-                status.set(str(result))
+                status.set(str(result) + (' Automatic Hunt is running in the background.'
+                           if 'Memory controls are blocked' in str(result) else ''))
             else:
                 connecting = False
                 selected = launcher.session
