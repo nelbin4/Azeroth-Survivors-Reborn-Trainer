@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.9.9
+# Azeroth Survivor Reborn Trainer 0.9.10
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -13,7 +13,7 @@ Derived from the process validation and recovery approach of
 Download the portable zip from [Reborn Trainer Releases](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases),
 extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. If the game is
 closed, click **Run Azeroth Survivors Reborn**. Start a solo run in the game,
-then open **Stats** and click **Find**. This starts automatic background Hunt.
+then click **Find** in the trainer. This starts automatic background Hunt.
 **Auto max & freeze newly found stats** is enabled by default. Verified fields
 are maximized on their first usable read while discovery continues. No stat search or stat
 write starts automatically before Find. Keep the trainer open.
@@ -89,7 +89,7 @@ is intact; v0.6.4 fixes subsequent update restarts.
 
 **Find** starts automatic background Hunt for the selected game process.
 No numeric values need to be entered. It keeps running when another tab is selected, without
-switching tabs or taking focus from the game. It uses the same Stats interface on supported older layouts and newer
+taking focus from the game. It uses the same Stats interface on supported older layouts and newer
 independently proven layouts, and discards stale results after process changes.
 
 **Max & freeze each verified stat as soon as it is found** is enabled by default.
@@ -191,9 +191,6 @@ requiring exactly one active hero; multiple players remain blocked. Duplicate st
 grouped by allocation and identity. Distinct hero allocations remain blocked.
 Hold polling skips unchanged values and uses no injected code.
 
-Permanent save upgrades remain restricted to the separately verified original
-save format/build. A compatible live layout does not establish save compatibility.
-
 ## Player controls
 
 **Max & freeze all** holds supported stats and resources at the trainer's limits.
@@ -227,28 +224,6 @@ After Find, Hunt follows new runs and validates their fresh solo ownership befor
 resuming eligible holds. Stop search does not locate a new allocation until Find
 is used again. Pause freezes leaves configured targets intact and resumes only
 through Resume freezes or Max & freeze all. Keep the trainer open for active holds.
-
-## Permanent progression
-
-Exit Reborn, then use **Max progression**. The trainer authenticates the save,
-backs it up, creates and verifies an upgrade, and atomically installs it only
-while the game is closed. With the supported content catalog it adds 1,080 gear
-entries across 12 classes and nine rarities, sets five stars using native save
-syntax, selects the highest tier, unlocks all 83 catalog achievements, grants
-maximum earned class talent XP, account level 30, and at least 99,999,999 bank gold.
-Existing character identities, talent allocations and unrelated records are kept.
-Individual talent ranks, paid entitlements, zone completion, and cloud-sync
-controls are not modified. Cloud availability is managed by the game. Local
-upgrades do not force a cloud overwrite; synchronization may replace them with
-the cloud account. No cloud force-upload feature is included.
-
-**Save game backup** copies the latest authenticated disk save and on-disk WTF
-settings, including saved talent allocations. It does not force a running fight
-to serialize or upload to the cloud.
-
-Backups are in the trainer folder's backups directory. To undo a permanent
-upgrade, close Reborn and restore the corresponding before-max.sav to
-UserData/survivors-save.tsv in the game directory. Keep your backup private.
 
 ## Validation
 

@@ -1,11 +1,8 @@
 import struct
 import unittest
-import tempfile
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 from player import Player, STATS, PLAYER_SIGNATURES, NAME_OFFSET
-from save_editor import GameData, backup_save, apply_upgrade
 from test_trainer import FakeMemory
 
 
@@ -123,71 +120,3 @@ class PlayerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.p.set_stat('damage', 9999)
         self.assertEqual(self.t.memory.writes, [])
-
-
-class SaveTests(unittest.TestCase):
-    def setUp(self):
-        self.g = GameData.__new__(GameData)
-        self.g.stream_key = bytes(range(32))
-        self.g.tag_key = bytes(range(32, 64))
-
-    def test_envelope_authentication_and_payload_version(self):
-        text = 'VER\t1\nC\taccount\t123\n'
-        for flag in (0, 1):
-            raw = self.g.seal(text, flag)
-            self.assertEqual(self.g.unseal(raw), text)
-            corrupt = bytearray(raw)
-            corrupt[20] ^= 1
-            with self.assertRaises(ValueError):
-                self.g.unseal(corrupt)
-        with self.assertRaises(ValueError):
-            self.g.seal('VER\t2\n')
-
-    def test_max_gear_uses_native_star_and_worn_syntax(self):
-        assets = {f'base/classes/c{i}/class.toml': {'id': i} for i in range(1, 13)}
-        assets.update({f'{p}/gear_tiers.toml': {'gear_tier': [{}]} for p in ('tbc', 'wotlk', 'cata')})
-        assets['base/account/levels.toml'] = dict(max_level=30, xp_first=1000, xp_step=250)
-        assets['achievements.toml'] = {'achievement': [{'key': f'a{i}'} for i in range(83)]}
-        self.g.assets = lambda: iter(assets.items())
-        identity = ['C', 'account', '123', 'hero'] + ['0'] * 8
-        aggregate = ['A', 'account'] + ['0'] * 19
-        aggregate[13] = ''
-        text = '\n'.join('\t'.join(r) for r in [identity, aggregate, ['UNKNOWN', 'preserve'], ['W', 'account', '5', '', '']]) + '\n'
-        result, summary = self.g.maximize(text)
-        self.assertIn('\t'.join(identity) + '\n', result)
-        self.assertIn('UNKNOWN\tpreserve\n', result)
-        rows = [r.split('\t') for r in result.splitlines()]
-        gear = [r for r in rows if r[0] == 'G']
-        self.assertEqual(summary['gear'], 1080)
-        self.assertEqual(len(gear), 12)
-        for row in gear:
-            entries = row[3].split(',')
-            self.assertEqual(len(entries), 90)
-            self.assertEqual(sum(e.endswith('*5!') for e in entries), 10)
-            self.assertTrue(all('*5' in e for e in entries))
-        again, _ = self.g.maximize(result)
-        self.assertEqual(again, result)
-
-    def test_backup_keeps_save_and_talent_settings(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / 'UserData').mkdir()
-            (root / 'WTF').mkdir()
-            raw = self.g.seal('VER\t1\n')
-            (root / 'UserData/survivors-save.tsv').write_bytes(raw)
-            (root / 'WTF/Config.wtf').write_text('SET azsTalentsSHAMAN "5-0-0"')
-            with patch('save_editor.GameData', return_value=self.g):
-                backup = backup_save(root / 'game.exe', root / 'backup')
-                self.assertEqual(Path(backup).read_bytes(), raw)
-                self.assertEqual((root / 'backup/WTF/Config.wtf').read_text(), 'SET azsTalentsSHAMAN "5-0-0"')
-                with self.assertRaises(FileExistsError):
-                    backup_save(root / 'game.exe', root / 'backup')
-
-    def test_apply_blocks_running_game(self):
-        with patch('trainer.find_games', return_value=[Mock()]):
-            with self.assertRaisesRegex(RuntimeError, 'Exit Reborn'):
-                apply_upgrade('nonexistent.exe', 'upgrade', 'backup')
-
-
-if __name__ == '__main__':
-    unittest.main()

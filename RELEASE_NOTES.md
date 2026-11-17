@@ -1,4 +1,4 @@
-Azeroth Survivor Reborn Trainer v0.9.9
+Azeroth Survivor Reborn Trainer v0.9.10
 
-- Remove Run options from the GUI, Find workflow, and command line. Connecting no longer applies native configuration defaults.
-- Keep Stats and Saves. Find verifies player layouts independently of the removed options.
+- Remove the Saves tab, save backup action, and permanent progression editor. Existing saves and backups stay on disk.
+- Show Stats directly in the main window.

@@ -22,10 +22,9 @@ import psutil
 from compatibility import resolve, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.9.9'
+VERSION = '0.9.10'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
-BUILD = 'ab7b6332a6c47e4c29188e44932939e560b274cf06e0f212cb3ada119a3a3d35'
 
 
 def find_games(path=None):
@@ -223,12 +222,8 @@ def run_gui():
     detail = tk.StringVar(value='')
     ttk.Label(body, textvariable=status, font=('Segoe UI', 10), foreground='#76dfc1', wraplength=1030).pack(anchor='w', pady=(0, 6))
     # Full executable path remains in settings; avoid a second empty status row.
-    tabs = ttk.Notebook(body)
-    tabs.pack(fill='both', expand=True)
-    stats_tab = ttk.Frame(tabs)
-    progression_tab = ttk.Frame(tabs, padding=12)
-    tabs.add(stats_tab, text='Stats')
-    tabs.add(progression_tab, text='Saves')
+    stats_area = ttk.Frame(body)
+    stats_area.pack(fill='both', expand=True)
     trainer = None
     pending = queue.Queue()
     connection_generation = 0
@@ -247,53 +242,8 @@ def run_gui():
         status.set(str(exc))
 
     from stats_panel import StatsPanel
-    stats_panel = StatsPanel(root, stats_tab, lambda: launcher.session, lambda: trainer, lambda: closing)
+    stats_panel = StatsPanel(root, stats_area, lambda: launcher.session, lambda: trainer, lambda: closing)
 
-    ttk.Label(progression_tab, text='Max permanent progression', font=('Segoe UI', 14, 'bold')).pack(anchor='w', pady=(0, 12))
-    ttk.Label(progression_tab, text='Creates and verifies an upgraded save from this exact game build, with an original backup.\n\n• All class gear, every rarity, upgraded\n• All catalog achievements\n• Maximum class talent experience\n• Account level 30\n\nExit the game before applying. Your character identities and other save records are kept. Individual talent allocations are not changed.',
-              wraplength=590).pack(anchor='w')
-    progression_status = tk.StringVar(value='Backups and upgraded saves are kept in the trainer folder.')
-    ttk.Label(progression_tab, textvariable=progression_status, wraplength=590, foreground='#a9b8c8').pack(anchor='w', pady=15)
-
-    def max_account():
-        from save_editor import prepare_upgrade, apply_upgrade
-        from datetime import datetime
-        path = saved.get('game_exe')
-        if not path:
-            status.set('Locate the Reborn game executable first.')
-            return
-        try:
-            if resolve(path).digest != BUILD:
-                raise RuntimeError('Stat discovery supports this layout, but permanent save upgrades require a separately verified save format. No save changed.')
-            folder = ROOT / 'backups' / datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-            result = prepare_upgrade(path, folder)
-            if find_games(path):
-                progression_status.set(f"Upgrade prepared: {result['path']}\nExit Reborn, then press Max progression again to apply a fresh upgrade.")
-            else:
-                apply_upgrade(path, result['path'], result['backup'])
-                progression_status.set(f"Applied. Start Reborn to load the upgrade.\nOriginal backup: {result['backup']}")
-        except Exception as exc:
-            progression_status.set(str(exc))
-            error(exc)
-
-    ttk.Button(progression_tab, text='Max progression', command=max_account).pack(anchor='w')
-    def save_backup():
-        from save_editor import backup_save
-        from datetime import datetime
-        path = saved.get('game_exe')
-        if not path:
-            status.set('Locate the Reborn game executable first.')
-            return
-        try:
-            folder = ROOT / 'backups' / ('save-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
-            target = backup_save(path, folder)
-            status.set(f'Save backup verified: {target}')
-            progression_status.set(f'Save and on-disk talent settings backed up: {folder}')
-        except Exception as exc:
-            error(exc)
-
-    ttk.Button(progression_tab, text='Save game backup', command=save_backup).pack(anchor='w', pady=10)
-    ttk.Label(progression_tab, text='Backs up the latest authenticated disk save and on-disk talent settings. Reborn saves progression automatically. This does not force a running fight to save or upload to the cloud.', wraplength=590).pack(anchor='w')
     actions = ttk.Frame(body)
     actions.pack(fill='x')
 
