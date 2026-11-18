@@ -11,7 +11,8 @@ verified co-op host sessions.
 3. Click **Find**. Hunt searches in the background. Each checked stat applies and freezes at the trainer limit as soon as Hunt verifies the character, session, and stat.
 
 Damage bonus, Cooldown reduction, Area of effect, and Luck bonus are checked by default.
-Selections and manual targets are stored locally in `reborn-settings.json`.
+Selections and manual targets are stored in
+`%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-settings.json`.
 Keep the trainer open for active freezes.
 
 ## Launch and process controls
@@ -77,7 +78,9 @@ opens the project repository. Source runs and releases without a verified
 executable open the release page for manual installation.
 
 If an update cannot start, close the trainer and copy that backup over the main
-executable. The trainer folder must be writable. Network failures leave the
+executable. The executable folder must be writable for the self-update; settings
+and logs live under `%LOCALAPPDATA%`, so the trainer still starts from a
+read-only folder. Network failures leave the
 installed version usable; GitHub API rate limits can delay checks. No GitHub
 login or credentials are required.
 

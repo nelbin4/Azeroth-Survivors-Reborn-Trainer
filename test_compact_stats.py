@@ -1,6 +1,5 @@
 import struct
 import unittest
-from capstone import Cs,CS_ARCH_X86,CS_MODE_64
 
 from compact_stats import DESCRIPTION,LABELS,KEYS,discover_compact_stats,unary_summary
 from code_search import stat_serializers

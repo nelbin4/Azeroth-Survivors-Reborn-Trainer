@@ -84,6 +84,9 @@ class UpdaterTests(unittest.TestCase):
             self.assertIn('previous.exe', script)
             self.assertIn('Get-Process -Id 123', script)
             self.assertIn('[IO.File]::Copy', script)
+            self.assertIn('-PassThru', script)
+            self.assertIn('HasExited', script)
+            self.assertIn('$p.Path', script)
             self.assertIn("$env:PYINSTALLER_RESET_ENVIRONMENT='1'", script)
             with self.assertRaises(ValueError):
                 updater.install_command(staged, root / 'elsewhere/Trainer.exe', 123)

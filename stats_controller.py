@@ -1,6 +1,7 @@
 """One background owner for discovery, live readings, edits and stat holds."""
 from contextlib import nullcontext
 import hashlib
+import logging
 from pathlib import Path
 import queue
 import threading
@@ -112,8 +113,8 @@ class StatsController:
         self.on_change=on_change
         self.policy=StatsPolicy(preferences)
         self.worker=StatsWorker()
-        from trainer import ROOT
-        self.role_monitor=RoleMonitor(ROOT/'reborn-role-cache.json')
+        from trainer import STATE
+        self.role_monitor=RoleMonitor(STATE/'reborn-role-cache.json')
         self.role='unknown'
         self.role_lease=None
         self.schedule=HuntSchedule()
@@ -147,6 +148,11 @@ class StatsController:
         if not self.connected_session():
             self.message='Wait for Reborn to connect before using Find.'
             self.on_change();return
+        hunt = getattr(self.worker, 'hunt', None)
+        if hunt is not None:
+            # An explicit Find must be able to retry a previously unavailable
+            # discovery error instead of waiting for the image identity to change.
+            hunt.plan_error = None
         self.policy.searching=True
         self.message='Finding verified stats in the background…'
         self.changed()
@@ -171,6 +177,15 @@ class StatsController:
         self.changed()
 
     def poll(self):
+        try:
+            self._poll()
+        except Exception:
+            logging.exception('Stats poll failed')
+        finally:
+            if not self.closed:
+                self.root.after(250,self.poll)
+
+    def _poll(self):
         if self.closed or self.closing():self.close();return
         session=self.connected_session()
         self.role_monitor.start(session)
@@ -203,9 +218,14 @@ class StatsController:
                     old=set(self.policy.holds)
                     self.last=result
                     self.policy.accept(result.get('owner'),result['values'])
-                    successful=set(result['freeze'].get('held',{}))
+                    freeze=result.get('freeze',{})
+                    successful=set(freeze.get('held',{}))
                     self.policy.pending.difference_update(successful)
-                    held = 0 if self.policy.paused else len(set(result['freeze'].get('confirmed', {})) & self.policy.holds)
+                    if result.get('host_required'):
+                        # Writes are impossible in this state; keeping queued
+                        # targets would retry them forever with no progress.
+                        self.policy.pending.clear()
+                    held = 0 if self.policy.paused else len(set(freeze.get('confirmed', {})) & self.policy.holds)
                     selected=result.get('heroes',[{}])[0] if result.get('heroes') else {}
                     who = f" · {selected.get('name') or 'player'}" if selected else ''
                     if selected.get('level') is not None:
@@ -246,4 +266,3 @@ class StatsController:
                 except Exception as exc:result=exc
                 self.results.put((epoch,result))
             threading.Thread(target=work,daemon=True).start()
-        self.root.after(250,self.poll)

@@ -26,7 +26,7 @@ def private_regions(memory):
     query.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(Region), ctypes.c_size_t]
     query.restype = ctypes.c_size_t
     address = 0x10000
-    for _ in range(100000):
+    while True:
         region = Region()
         if not query(memory.handle, address, ctypes.byref(region), ctypes.sizeof(region)):
             break

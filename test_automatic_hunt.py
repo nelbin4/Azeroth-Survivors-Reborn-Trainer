@@ -130,6 +130,19 @@ class AutomaticHuntTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.step()
         self.assertEqual(self.source.call_count,2)
 
+    def test_transient_plan_failure_is_retried_after_backoff(self):
+        self.source.side_effect=[OSError('file is locked'), (self.plan, file_identity(self.path))]
+        with self.assertRaises(OSError):self.step()
+        self.assertEqual(self.source.call_count,1)
+        kind,message,retry_at=self.hunt.plan_error
+        self.assertEqual((kind,message),(OSError,'file is locked'))
+        self.assertIsNotNone(retry_at)
+        # Simulate the deadline elapsing without waiting five real seconds.
+        self.hunt.plan_error=(kind,message,0)
+        self.assertEqual(len(self.step()['heroes']),1)
+        self.assertEqual(self.source.call_count,2)
+        self.assertIsNone(self.hunt.plan_error)
+
     def test_independent_search_plan_survives_missing_named_metadata(self):
         self.path.write_bytes(fixture())
         plan,stamp=make_plan(self.path)

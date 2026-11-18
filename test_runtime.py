@@ -1,5 +1,4 @@
 import unittest
-from unittest.mock import Mock
 from runtime import RetrySchedule, same_session
 
 

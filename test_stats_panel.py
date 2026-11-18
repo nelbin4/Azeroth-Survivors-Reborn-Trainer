@@ -83,6 +83,11 @@ class StatsPanelTests(unittest.TestCase):
         self.assertTrue(self.panel.entry.instate(['disabled']))
         self.assertTrue(self.panel.apply_button.instate(['disabled']))
 
+    def test_current_health_cannot_be_queued_for_apply(self):
+        self.panel.controller.policy.accept('hero', {'health': 100, 'max_health': 1000000})
+        self.panel.select('health')
+        self.assertTrue(self.panel.apply_button.instate(['disabled']))
+
     def test_progress_tracks_search_role_check_completion_and_cancel(self):
         self.panel.find_button.invoke()
         self.assertTrue(self.panel.progress_running)

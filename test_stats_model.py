@@ -105,3 +105,9 @@ class StatsPolicyTests(unittest.TestCase):
         policy.set_target('crit', 50)
         self.assertEqual(policy.request()['keys'], {'crit'})
         self.assertFalse(policy.request()['auto_keys'])
+
+    def test_current_health_cannot_be_set_as_a_one_time_target(self):
+        policy = StatsPolicy()
+        with self.assertRaises(ValueError):
+            policy.set_target('health', 500)
+        self.assertEqual(policy.targets['health'], 1000000)

@@ -5,8 +5,6 @@ import json
 import struct
 import re
 
-import psutil
-
 MAX_VECTOR_CAPACITY = 64
 
 

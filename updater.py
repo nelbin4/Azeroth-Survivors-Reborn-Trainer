@@ -71,19 +71,22 @@ def download(release, directory):
     path = directory / f'trainer-{tag}.download'
     hasher = hashlib.sha256()
     total = 0
-    with request(asset['url']) as response, path.open('wb') as output:
+    with request(asset['url']) as response:
+        # Validate the redirect before creating/truncating the destination, so
+        # a rejected response cannot leave a partial download behind.
         final = urlparse(response.geturl())
         if final.scheme != 'https' or not (final.hostname == 'github.com' or
                 (final.hostname or '').endswith('.githubusercontent.com')):
             raise ValueError('Unexpected download redirect.')
-        while block := response.read(256 * 1024):
-            total += len(block)
-            if total > asset['size'] or total > MAX_DOWNLOAD:
-                raise ValueError('Download exceeded its declared size.')
-            hasher.update(block)
-            output.write(block)
-        output.flush()
-        os.fsync(output.fileno())
+        with path.open('wb') as output:
+            while block := response.read(256 * 1024):
+                total += len(block)
+                if total > asset['size'] or total > MAX_DOWNLOAD:
+                    raise ValueError('Download exceeded its declared size.')
+                hasher.update(block)
+                output.write(block)
+            output.flush()
+            os.fsync(output.fileno())
     if total != asset['size'] or hasher.hexdigest() != asset['digest']:
         raise ValueError('Download verification failed. Nothing installed.')
     raw = path.read_bytes()
@@ -108,8 +111,10 @@ $staged={quote(staged)}
 $backup={quote(target.with_suffix('.previous.exe'))}
 $deadline=(Get-Date).AddSeconds(90)
 $backedUp=$false
-while (Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue) {{
+while ($p = Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue) {{
   if ((Get-Date) -gt $deadline) {{ exit 1 }}
+  # A reused PID must not stall the update: only wait for the trainer image.
+  try {{ if (-not $p.Path -or $p.Path -ne $target) {{ break }} }} catch {{}}
   Start-Sleep -Milliseconds 300
 }}
 while ((Get-Date) -lt $deadline) {{
@@ -119,7 +124,15 @@ while ((Get-Date) -lt $deadline) {{
     if ($actual -ne '{digest}') {{ exit 2 }}
     if (-not $backedUp) {{ [IO.File]::Copy($target,$backup,$true); $backedUp=$true }}
     [IO.File]::Copy($staged,$target,$true)
-    try {{ Start-Process -FilePath $target -WorkingDirectory {quote(target.parent)} }}
+    try {{
+      $new=Start-Process -FilePath $target -WorkingDirectory {quote(target.parent)} -PassThru
+      Start-Sleep -Seconds 6
+      if ($new.HasExited -and $new.ExitCode -ne 0) {{
+        [IO.File]::Copy($backup,$target,$true)
+        Start-Process -FilePath $target -WorkingDirectory {quote(target.parent)} | Out-Null
+        exit 3
+      }}
+    }}
     catch {{ [IO.File]::Copy($backup,$target,$true); throw }}
     exit 0
   }} catch {{ Start-Sleep -Milliseconds 500 }}

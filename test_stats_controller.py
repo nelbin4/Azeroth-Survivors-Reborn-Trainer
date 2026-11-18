@@ -178,3 +178,16 @@ class StatsControllerTests(unittest.TestCase):
         native.process.pid -= 1
         controller.find()
         self.assertTrue(controller.policy.searching)
+
+    def test_blocked_session_clears_queued_one_time_targets(self):
+        controller = self.controller()
+        controller.worker = SimpleNamespace(mode=None)
+        controller.session = controller.session_provider()
+        controller.policy.set_target('crit', 50)
+        self.assertEqual(controller.policy.pending, {'crit'})
+        blocked = dict(heroes=[{}], values={}, freeze=dict(held={}), partial=False,
+                       ambiguous=False, owner='hero', role='unknown', host_required=True)
+        with patch('stats_controller.threading.Thread'):
+            controller.results.put((controller.epoch, blocked))
+            controller.poll()
+        self.assertEqual(controller.policy.pending, set())

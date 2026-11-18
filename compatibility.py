@@ -109,7 +109,7 @@ def _resolve(path, size, modified, created, file_id, generation):
             fields, field_guards = discover_stat_fields(blob, sections, code, text[2])
         except MetadataUnavailable:
             if stats != expected_stats:
-                raise ValueError('player fields lack independent named metadata')
+                raise ValueError('player fields lack independent named metadata') from None
         if fields is not None:
             signatures.update(field_guards)
             # The name-copy routine must independently use the same game vector,

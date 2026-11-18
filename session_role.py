@@ -9,6 +9,7 @@ import struct
 import time
 import threading
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -213,7 +214,7 @@ class RoleMonitor:
     def __init__(self,cache=None):
         self.cache=Path(cache) if cache else None
         self.lock=threading.Lock();self.session=None;self.cancel=threading.Event()
-        self.role='unknown';self.lease=None
+        self.role='unknown';self.lease=None;self.last_error=None;self._cached=None
 
     def snapshot(self,session):
         with self.lock:
@@ -226,13 +227,14 @@ class RoleMonitor:
             if session==self.session:return
             self.cancel.set();self.cancel=threading.Event();cancel=self.cancel
             self.session=session;self.role='unknown';self.lease=None
+            self.last_error=None;self._cached=None
         if session is None:return
         def work():
             from trainer import Memory
             probe=SessionRole(budget=128*1024*1024,seconds=.2)
             identity=[session.pid,session.created,session.path]
             try:
-                data=json.loads(self.cache.read_text()) if self.cache else {}
+                data=json.loads(self.cache.read_text(encoding='utf-8')) if self.cache else {}
                 if (data.get('session')==identity and isinstance(data.get('state'),int) and pointer(data['state'])
                         and isinstance(data.get('env'),int) and pointer(data['env'])):
                     probe.session=session;probe.state=data['state'];probe.env=data['env']
@@ -246,19 +248,25 @@ class RoleMonitor:
                     with self.lock:
                         if cancel.is_set():return
                         self.role,self.lease=role,lease
-                    if lease and self.cache:
+                        self.last_error=None
+                    if lease and self.cache and lease != self._cached:
                         data=dict(session=identity,state=lease.state,env=lease.env)
                         try:
-                            if not self.cache.exists() or json.loads(self.cache.read_text())!=data:
-                                self.cache.write_text(json.dumps(data),encoding='utf-8')
-                        except (OSError,ValueError):pass
+                            self.cache.write_text(json.dumps(data),encoding='utf-8')
+                            self._cached=lease
+                        except OSError:pass
                 except InterruptedError:return
-                except Exception:
-                    probe.reset()
+                except Exception as exc:
+                    message=f'{type(exc).__name__}: {exc}'
                     with self.lock:
                         if cancel.is_set():return
                         self.role,self.lease='unknown',None
+                        changed=self.last_error!=message
+                        self.last_error=message
+                    if changed:
+                        logging.debug('Session role scan failed: %s', message)
+                    probe.reset()
                 finally:
                     if memory:memory.close()
-                cancel.wait(.5 if self.lease else .02)
+                cancel.wait(.5 if self.lease else .2)
         threading.Thread(target=work,daemon=True,name='Reborn session role').start()

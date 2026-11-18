@@ -61,7 +61,7 @@ class StatsPanel:
         self.table.heading('#0', text='Freeze', anchor='center')
         self.table.column('#0', width=76, minwidth=76, stretch=False, anchor='center')
         self.checkbox_images = {enabled: self.make_checkbox(enabled) for enabled in (False, True)}
-        for column, width, anchor in zip(columns, (175, 95, 105, 109), ('w', 'e', 'e', 'w')):
+        for column, width, anchor in zip(columns, (175, 95, 105, 109), ('w', 'e', 'e', 'w'), strict=True):
             self.table.heading(column, text='Status' if column == 'state' else column.title(), anchor=anchor)
             self.table.column(column, width=width, minwidth=48, anchor=anchor, stretch=column == 'stat')
         for view in VIEWS:
@@ -259,7 +259,7 @@ class StatsPanel:
         read_only = role in ('unknown', 'guest') or last.get('host_required')
         for view in VIEWS:
             key = view.key
-            frozen = key in policy.holds
+            frozen = key in policy.holds and key in policy.verified
             known = key in policy.verified
             target = 'Full' if key == 'health' else f'{policy.effective_target(key):,}{view.unit}'
             if key == 'max_health':
@@ -303,7 +303,7 @@ class StatsPanel:
         if unavailable:
             self.help.set('Hunt could not verify this stat on the current build.')
         self.apply_button.configure(text='Apply' if can_apply else 'Queue target',
-                                    state='disabled' if enabled or unavailable else 'normal')
+                                    state='disabled' if enabled or unavailable or view.key == 'health' else 'normal')
 
         if self.advanced is not None and self.advanced.winfo_exists():
             self.refresh_detection_details(connected_session)
@@ -333,6 +333,9 @@ class StatsPanel:
             'Verified stats': f'{len(policy.verified)} of {len(VIEWS)}',
             'Frozen': f'{len(frozen)} of {len(policy.enabled)} enabled',
         }
+        role_error = getattr(controller.role_monitor, 'last_error', None)
+        if session and isinstance(role_error, str) and role_error:
+            fields['Role scan'] = role_error
         lines = [self.summary.get(), '']
         lines.extend(f'{label}: {value}' for label, value in fields.items())
         errors = freeze.get('errors', {})

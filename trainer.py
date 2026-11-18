@@ -22,9 +22,17 @@ import psutil
 from compatibility import resolve, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.9.17'
+VERSION = '0.9.18'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
-SETTINGS = ROOT / 'reborn-settings.json'
+# Settings, logs and caches must survive an executable directory that is not
+# writable (Program Files, a read-only share, or a USB stick).
+STATE = Path(os.environ.get('LOCALAPPDATA') or Path.home()) / APP_NAME
+try:
+    STATE.mkdir(parents=True, exist_ok=True)
+except OSError:
+    STATE = ROOT
+SETTINGS = STATE / 'reborn-settings.json'
+LOG_FILE = STATE / 'reborn-trainer.log'
 
 
 def find_games(path=None):
@@ -141,8 +149,20 @@ class Trainer:
                 raise RuntimeError('Game instruction mismatch. Reconnect before using Find.')
 
     def close(self):
-        with getattr(self,'write_gate',threading.RLock()):
+        gate = getattr(self, 'write_gate', None)
+        if gate is None:
             self._close()
+            return
+        # Never block the Tk thread for the whole duration of a background
+        # write batch; the worker's cancelled() check aborts shortly after.
+        acquired = gate.acquire(timeout=5)
+        if not acquired:
+            logging.warning('Closing the trainer while a stat write is still running.')
+        try:
+            self._close()
+        finally:
+            if acquired:
+                gate.release()
 
     def _close(self):
         if self.memory:
@@ -185,13 +205,27 @@ def run_gui():
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
 
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except (AttributeError, OSError):
+        pass
     root = tk.Tk()
     root.title(APP_NAME)
+
+    def report_callback_exception(exc_type, exc, traceback):
+        logging.error('Tk callback failed', exc_info=(exc_type, exc, traceback))
+
+    root.report_callback_exception = report_callback_exception
     logo_path = Path(__file__).resolve().parent / 'assets' / 'trainer-logo.png'
-    logo = tk.PhotoImage(master=root, file=str(logo_path))
-    root.iconphoto(True, logo)
+    try:
+        logo = tk.PhotoImage(master=root, file=str(logo_path))
+        root.iconphoto(True, logo)
+    except tk.TclError:
+        logo = None
+        logging.warning('Trainer logo not found: %s', logo_path)
     root.geometry('1010x810')
-    root.resizable(False, False)
+    root.minsize(940, 720)
+    root.resizable(True, True)
     root.configure(bg='#14202c')
     style = ttk.Style(root)
     style.theme_use('clam')
@@ -221,7 +255,8 @@ def run_gui():
     body.pack(fill='both', expand=True)
     header = ttk.Frame(body)
     header.pack(fill='x', pady=(0, 8))
-    ttk.Label(header, image=logo).pack(side='left', padx=(0, 10))
+    if logo is not None:
+        ttk.Label(header, image=logo).pack(side='left', padx=(0, 10))
     ttk.Label(header, text='AZEROTH SURVIVORS REBORN', foreground='#e3be69', font=('Segoe UI', 20, 'bold')).pack(side='left')
     status = tk.StringVar(value='Waiting for Azeroth Survivors: Reborn.')
     detail = tk.StringVar(value='')
@@ -406,7 +441,7 @@ def run_gui():
         except Exception as exc:
             pending.put((generation, exc))
 
-    def poll():
+    def poll_once():
         nonlocal trainer, connecting, update_busy, latest_release, next_process_scan
         now = time.monotonic()
         if now >= next_process_scan:
@@ -466,7 +501,10 @@ def run_gui():
                     trainer = result
                     retry.reset()
                     saved['game_exe'] = trainer.path
-                    atomic_json(SETTINGS, saved)
+                    try:
+                        atomic_json(SETTINGS, saved)
+                    except OSError as exc:
+                        logging.warning('Could not save settings: %s', exc)
                     status.set(f'Connected to PID {trainer.process.pid}. Use Find in Stats to start Hunt.')
                     detail.set(trainer.path)
         except queue.Empty:
@@ -485,8 +523,17 @@ def run_gui():
         if not trainer and not connecting and launcher.session and retry.ready(time.monotonic()):
             connecting = True
             threading.Thread(target=connect_worker, args=(launcher.session, connection_generation), daemon=True).start()
-        if not closing:
-            root.after(500, poll)
+
+    def poll():
+        # One bad frame must never stop the heartbeat: connection detection,
+        # status updates and stat refreshes all depend on this loop.
+        try:
+            poll_once()
+        except Exception:
+            logging.exception('Trainer poll failed')
+        finally:
+            if not closing:
+                root.after(500, poll)
 
     def close():
         nonlocal closing
@@ -511,8 +558,12 @@ def main():
     parser.add_argument('--game', help='Full path to AzerothSurvivorsGame.exe')
     parser.add_argument('--max-player', action='store_true', help='Compatibility flag retained; use Find and auto max/freeze in Stats.')
     args = parser.parse_args()
-    logging.basicConfig(filename=ROOT / 'reborn-trainer.log', level=logging.INFO,
-                        format='%(asctime)s %(levelname)s %(message)s')
+    try:
+        logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
+                            format='%(asctime)s %(levelname)s %(message)s')
+    except OSError:
+        # A read-only profile or disk error must not stop the trainer.
+        logging.basicConfig(level=logging.INFO)
     if args.command == 'gui':
         run_gui()
         return

@@ -91,9 +91,11 @@ class StatsPolicy:
     def set_target(self, key, value):
         if key in self.enabled:
             raise ValueError('Uncheck this stat to apply a one-time target.')
+        if key == 'health':
+            raise ValueError('Current health follows verified maximum health.')
         view = BY_KEY[key]
         view.native(value)
-        self.targets[key] = view.maximum if key == 'health' else int(float(value))
+        self.targets[key] = int(float(value))
         self.pending.add(key)
 
     def preferences(self):
@@ -110,7 +112,9 @@ class StatsPolicy:
 
     def request(self):
         automatic = self.enabled.copy() if self.searching and not self.paused else set()
-        held = self.holds & self.enabled if not self.paused else set()
+        # Only fields that are currently proven may be written, even if the
+        # user's hold intent survived an owner or verification change.
+        held = (self.holds & self.enabled & self.verified) if not self.paused else set()
         return dict(auto_keys=automatic,
                     targets={key: view.native(self.effective_target(key))
                              for key, view in BY_KEY.items() if key != 'health'},

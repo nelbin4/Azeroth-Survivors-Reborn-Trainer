@@ -174,24 +174,34 @@ class AutomaticHunt:
         stamp = file_identity(session.path)
         if self.plan is None or self.stamp != stamp or self.base is None:
             if self.stamp == stamp and self.plan_error:
-                error_type, message = self.plan_error
-                raise error_type(message)
+                error_type, message, retry_at = self.plan_error
+                if retry_at is None or time.monotonic() < retry_at:
+                    raise error_type(message)
+                # Transient failures (image lock, update in progress, antivirus)
+                # are retried instead of disabling Hunt for the whole session.
+                self.plan_error = None
             self.reset()
             self.session = session
             self.stamp = stamp
             try:
                 self.plan, self.stamp = plan_source(session.path)
+            except PlayerArrayUnavailable as exc:
+                self.plan_error = (type(exc), str(exc), None)
+                raise
             except Exception as exc:
-                self.plan_error = (PlayerArrayUnavailable if isinstance(exc, PlayerArrayUnavailable) else RuntimeError,
-                                   str(exc))
+                self.plan_error = (type(exc), str(exc), time.monotonic() + 5)
                 raise
             check()
             try:
-                self.base = min(int(m.addr.split('-')[0], 16) for m in process.memory_maps(grouped=False)
-                                if str(Path(m.path).resolve()).casefold() == str(Path(session.path).resolve()).casefold())
+                modules = [int(m.addr.split('-')[0], 16) for m in process.memory_maps(grouped=False)
+                           if str(Path(m.path).resolve()).casefold() == str(Path(session.path).resolve()).casefold()]
             except Exception:
                 self.reset()
                 raise
+            if not modules:
+                self.reset()
+                raise RuntimeError('Cannot locate the game module in memory. Reconnect and try again.')
+            self.base = min(modules)
         plan = self.plan
         if memory.read(self.base + plan.rva, len(plan.guard)) != plan.guard:
             self.reset()
