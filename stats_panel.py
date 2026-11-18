@@ -1,4 +1,5 @@
 """Stats table and selected-stat editor."""
+from pprint import pformat
 import time
 import tkinter as tk
 from tkinter import font, ttk
@@ -313,10 +314,97 @@ class StatsPanel:
             for control in (self.xp_check, self.xp_button):
                 control.configure(state='normal' if xp_available else 'disabled')
             self.xp_status.set('XP controls require a verified solo layout.' if not xp_available else '')
-            self.diagnostics.configure(state='normal')
-            self.diagnostics.delete('1.0', 'end')
-            self.diagnostics.insert('end', repr(last) if last else controller.message)
-            self.diagnostics.configure(state='disabled')
+            self.refresh_detection_details(connected_session)
+
+    def refresh_detection_details(self, session):
+        controller = self.controller
+        policy = controller.policy
+        result = controller.last
+        self.detection_status.set(self.summary.get())
+        character = result['heroes'][0] if len(result.get('heroes', ())) == 1 else None
+        if character:
+            name = character.get('name') or 'Selected character'
+            if character.get('level') is not None:
+                name += f" · Level {character['level']}"
+        else:
+            name = 'Waiting for a verified character' if policy.searching else '—'
+        roles = {'host': 'Hosting multiplayer', 'guest': 'Guest · read-only',
+                 'none': 'Solo', 'unknown': 'Checking session role'}
+        freeze = result.get('freeze', {})
+        verified = policy.verified & policy.enabled
+        frozen = freeze.get('confirmed', {}).keys() & verified & policy.holds
+        fields = {
+            'Game process': f'PID {session.pid}' if session else 'Disconnected',
+            'Build': result.get('build') or '—',
+            'Character': name,
+            'Session': roles.get(controller.role, 'Checking session role') if session else '—',
+            'Verified stats': f'{len(policy.verified)} of {len(VIEWS)}',
+            'Frozen': f'{len(frozen)} of {len(policy.enabled)} enabled',
+        }
+        for label, value in fields.items():
+            self.detection_fields[label].set(value)
+
+        errors = freeze.get('errors', {})
+        warnings = [f'{BY_KEY[key].label}: {message}' for key, message in errors.items() if key in policy.enabled]
+        if result.get('ambiguous'):
+            warnings.insert(0, 'Multiple player allocations found. Writes are blocked until the character is verified.')
+        self.detection_warnings.set('\n'.join(warnings))
+        if warnings:
+            self.warning_label.grid()
+        else:
+            self.warning_label.grid_remove()
+
+        for view in VIEWS:
+            values = self.table.item(view.key, 'values')
+            if tuple(self.detection_table.item(view.key, 'values')) != values:
+                self.detection_table.item(view.key, values=values)
+
+    def copy_detection_details(self):
+        result = self.controller.last
+        self.advanced.clipboard_clear()
+        self.advanced.clipboard_append(pformat(result, sort_dicts=False) if result else self.summary.get())
+        self.copy_detection_button.configure(text='Copied')
+
+    def build_detection_details(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(4, weight=1)
+        header = ttk.Frame(parent)
+        header.grid(row=0, column=0, sticky='ew', pady=(0, 6))
+        ttk.Label(header, text='Detection details', font=('Segoe UI', 16, 'bold')).pack(side='left')
+        self.copy_detection_button = ttk.Button(header, text='Copy diagnostics', command=self.copy_detection_details)
+        self.copy_detection_button.pack(side='right')
+        self.detection_status = tk.StringVar()
+        ttk.Label(parent, textvariable=self.detection_status, foreground='#76dfc1',
+                  wraplength=840).grid(row=1, column=0, sticky='w', pady=(0, 8))
+
+        overview = ttk.Frame(parent)
+        overview.grid(row=2, column=0, sticky='ew', pady=(0, 10))
+        overview.columnconfigure(0, weight=1, uniform='overview')
+        overview.columnconfigure(1, weight=1, uniform='overview')
+        self.detection_fields = {}
+        for index, label in enumerate(('Game process', 'Build', 'Character', 'Session', 'Verified stats', 'Frozen')):
+            line = ttk.Frame(overview)
+            line.grid(row=index // 2, column=index % 2, sticky='ew', pady=2)
+            ttk.Label(line, text=label, width=16, foreground='#a9b8c8').pack(side='left')
+            value = self.detection_fields[label] = tk.StringVar()
+            ttk.Label(line, textvariable=value, wraplength=275).pack(side='left')
+
+        self.detection_warnings = tk.StringVar()
+        self.warning_label = ttk.Label(parent, textvariable=self.detection_warnings, foreground='#efaaaa', wraplength=840)
+        self.warning_label.grid(row=3, column=0, sticky='ew', pady=(0, 8))
+        table_area = ttk.Frame(parent)
+        table_area.grid(row=4, column=0, sticky='nsew')
+        columns = ('Stat', 'Current', 'Target', 'Status')
+        self.detection_table = ttk.Treeview(table_area, columns=columns, show='headings', style='Stats.Treeview')
+        for column, width, anchor in zip(columns, (270, 120, 120, 152), ('w', 'e', 'e', 'w')):
+            self.detection_table.heading(column, text=column, anchor=anchor)
+            self.detection_table.column(column, width=width, anchor=anchor, stretch=column == 'Stat')
+        for view in VIEWS:
+            self.detection_table.insert('', 'end', iid=view.key)
+        scroll = ttk.Scrollbar(table_area, orient='vertical', command=self.detection_table.yview)
+        scroll.pack(side='right', fill='y')
+        self.detection_table.configure(yscrollcommand=scroll.set)
+        self.detection_table.pack(side='left', fill='both', expand=True)
 
     def open_advanced(self):
         if self.advanced is not None and self.advanced.winfo_exists():self.advanced.lift();return
@@ -324,6 +412,9 @@ class StatsPanel:
         window=tk.Toplevel(self.root);self.advanced=window
         window.title('Stats · Advanced');window.geometry('980x680')
         tabs=ttk.Notebook(window);tabs.pack(fill='both',expand=True)
+        details = ttk.Frame(tabs, padding=16)
+        tabs.add(details, text='Detection details')
+        self.build_detection_details(details)
         manual=ttk.Frame(tabs,padding=16);tabs.add(manual,text='Manual value search')
         add_manual_panel(self.root,manual,self.controller.session_provider,lambda:self.closing() or not window.winfo_exists())
         actions = ttk.Frame(tabs, padding=16)
@@ -335,6 +426,5 @@ class StatsPanel:
         self.xp_button.pack(anchor='w')
         self.xp_status = tk.StringVar()
         ttk.Label(actions, textvariable=self.xp_status).pack(anchor='w', pady=8)
-        debug=ttk.Frame(tabs,padding=16);tabs.add(debug,text='Detection details')
-        self.diagnostics=tk.Text(debug,wrap='word',background='#0c1826',foreground='#e5e9ef',state='disabled')
-        self.diagnostics.pack(fill='both',expand=True);self.refresh()
+        tabs.select(details)
+        self.refresh()

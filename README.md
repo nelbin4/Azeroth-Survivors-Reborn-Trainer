@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.9.13
+# Azeroth Survivor Reborn Trainer 0.9.14
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -58,7 +58,7 @@ units in the editor and its native float representation in memory. Current
 health follows the live verified maximum. Maximum-health targets are minimums;
 larger native bonuses are preserved.
 
-**Advanced…** contains manual searches, detection details, and XP controls for verified solo layouts.
+**Advanced** opens Detection details first. It shows the verified character, session, stat readings, and any errors. Use **Copy diagnostics** for the raw data. Advanced also contains manual searches and XP controls for verified solo layouts.
 
 Disabling a per-stat hold or closing the trainer leaves the current stat value in place.
 Game, build, and player ownership changes invalidate stale results before any further write.

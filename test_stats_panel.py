@@ -112,3 +112,24 @@ class StatsPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.table.item('damage', 'image'), (str(self.panel.checkbox_images[True]),))
         self.assertTrue(self.panel.apply_button.instate(['!disabled']))
         self.assertTrue(self.panel.controller.policy.searching)
+
+    def test_advanced_opens_with_readable_detection_details(self):
+        controller = self.panel.controller
+        controller.role = 'host'
+        controller.policy.set_enabled('echo', True)
+        controller.policy.accept('hero', {'damage': 9999})
+        controller.last = {
+            'build': '950599aec161',
+            'heroes': [{'name': 'Tester', 'level': 11}],
+            'freeze': {'confirmed': {'damage': 9999}, 'errors': {'echo': 'Effect is not active.'}},
+        }
+        self.panel.open_advanced()
+        tabs = self.panel.advanced.winfo_children()[0]
+        self.assertEqual(tabs.tab(tabs.select(), 'text'), 'Detection details')
+        self.assertEqual(tabs.index(tabs.select()), 0)
+        self.assertEqual(self.panel.detection_fields['Game process'].get(), 'PID 123')
+        self.assertEqual(self.panel.detection_fields['Character'].get(), 'Tester · Level 11')
+        self.assertEqual(self.panel.detection_table.item('damage', 'values'),
+                         ('Damage bonus', '9,999%', '9,999%', 'Frozen'))
+        self.assertIn('Echo chance: Effect is not active.', self.panel.detection_warnings.get())
+        self.panel.advanced.destroy()
