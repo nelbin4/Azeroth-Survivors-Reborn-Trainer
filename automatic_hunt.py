@@ -13,7 +13,7 @@ import time
 
 from code_search import stat_serializers
 from stack_probe import stacks
-from hunt_fields import discover_fields
+from hunt_fields import discover_fields, resource_candidates
 from hero_identity import discover_identity, read_identity
 
 
@@ -23,7 +23,7 @@ class SearchPlan:
     vector: int
     index: int
     stride: int
-    stats: int
+    stats: int | None
     rva: int
     guard: bytes
     fields: tuple = ()
@@ -31,11 +31,43 @@ class SearchPlan:
     identity_guards: tuple = ()
     level_offset: int | None = 0x150
     health_offset: int = 0xF8
+    method: str = 'Stat serializer'
+
+
+class PlayerArrayUnavailable(ValueError):
+    """The image did not provide sufficient evidence for live player discovery."""
 
 
 def file_identity(path):
     state = Path(path).stat()
     return state.st_size, state.st_mtime_ns, state.st_ctime_ns, state.st_ino
+
+
+def corroborated_array(blob, sections, code, text_rva):
+    candidates = []
+    for resource, fields in resource_candidates(blob, sections, code, text_rva):
+        health = next((field for field in fields if field.key == 'health'), None)
+        maximum = next((field for field in fields if field.key == 'max_health'), None)
+        if not health or not maximum:
+            continue
+        try:
+            name, identity_guards = discover_identity(code, text_rva, resource.array)
+        except ValueError:
+            continue
+        # Identity must come from a separate routine and a separate field.
+        if name % 8 or not 0x160 <= name <= resource.stride - 24:
+            continue
+        if any(start < resource.rva + len(resource.raw) and resource.rva < start + len(raw)
+               for start, raw in identity_guards):
+            continue
+        if any(name < field.offset + struct.calcsize(field.fmt) and field.offset < name + 24
+               for field in fields):
+            continue
+        guards = tuple(dict((*identity_guards, *health.guards)).items())
+        candidates.append((resource, name, guards, fields))
+    if len(candidates) != 1:
+        raise PlayerArrayUnavailable(f'Expected a unique player array, found {len(candidates)} corroborated candidates.')
+    return candidates[0]
 
 
 def make_plan(path):
@@ -54,26 +86,43 @@ def make_plan(path):
     if len(code) != text[3]:
         raise ValueError('Truncated game image.')
     matches = stat_serializers(code, text[2])
-    if len(matches) != 1:
-        raise ValueError(f'Hunt cannot establish a unique player-array search region ({len(matches)} matches).')
-    match = matches[0]
-    index, count, pointer, stride = match.array
-    if not (pointer >= 8 and count == pointer + 8 and pointer < index < 0x10000
-            and 0x200 <= stride <= 0x10000 and stride % 8 == 0
-            and 0 <= match.value <= stride - 64 and match.value % 4 == 0):
-        raise ValueError('Hunt array bounds are inconsistent.')
     if before != file_identity(path):
         raise RuntimeError('Game image changed during Hunt discovery.')
-    try:
-        name, identity_guards = discover_identity(code,text[2],match.array)
-    except ValueError:
-        # Older verified families predate the string-copy metadata. Reuse only
-        # their full compatibility contract, never an inferred string offset.
-        from compatibility import resolve, Layout
-        layout=resolve(path)
-        if not isinstance(layout,Layout):raise ValueError('Player identity proof unavailable.')
-        name,identity_guards=layout.name,tuple(layout.signatures.items())
-    fields = discover_fields(blob,sections,code,text[2],match.array,match.value)
+    resources = None
+    method = 'Stat serializer'
+    match = matches[0] if len(matches) == 1 and matches[0].value % 4 == 0 else None
+    if match:
+        try:
+            name, identity_guards = discover_identity(code, text[2], match.array)
+        except ValueError:
+            from compatibility import resolve, Layout
+            try:
+                layout = resolve(path)
+            except RuntimeError as exc:
+                if not str(exc).startswith('Unsupported Reborn build'):
+                    raise
+                match = None
+            else:
+                if isinstance(layout, Layout) and (
+                    layout.index, layout.vector + 16, layout.vector + 8, layout.stride
+                ) == match.array:
+                    name, identity_guards = layout.name, tuple(layout.signatures.items())
+                else:
+                    match = None
+    if match:
+        stats = match.value
+    else:
+        match, name, identity_guards, resources = corroborated_array(blob, sections, code, text[2])
+        method = 'Identity and resources'
+        blocks = [item for item in matches if item.array == match.array and item.value % 4 == 0
+                  and item.value + 64 <= match.value
+                  and all(field.offset + struct.calcsize(field.fmt) <= item.value
+                          or item.value + 64 <= field.offset for field in resources)]
+        stats = blocks[0].value if len(blocks) == 1 else None
+        if stats is not None:
+            identity_guards = tuple(dict((*identity_guards, (blocks[0].rva, blocks[0].raw))).items())
+    index, _, pointer, stride = match.array
+    fields = discover_fields(blob, sections, code, text[2], match.array, stats, resources=resources)
     if before != file_identity(path):
         raise RuntimeError('Game image changed during field discovery.')
     level = next((field for field in fields if field.key == 'level'), None)
@@ -82,8 +131,8 @@ def make_plan(path):
         if field:
             identity_guards = tuple(dict((*identity_guards, *field.guards)).items())
     return SearchPlan(hashlib.sha256(blob).hexdigest(), pointer - 8, index, stride,
-                      match.value, match.rva, match.raw, fields, name, identity_guards, level.offset if level else None,
-                      health.offset if health else 0xF8), before
+                      stats, match.rva, match.raw, fields, name, identity_guards, level.offset if level else None,
+                      health.offset if health else 0xF8, method), before
 
 
 def health_candidates(raw):
@@ -125,14 +174,16 @@ class AutomaticHunt:
         stamp = file_identity(session.path)
         if self.plan is None or self.stamp != stamp or self.base is None:
             if self.stamp == stamp and self.plan_error:
-                raise RuntimeError(self.plan_error)
+                error_type, message = self.plan_error
+                raise error_type(message)
             self.reset()
             self.session = session
             self.stamp = stamp
             try:
                 self.plan, self.stamp = plan_source(session.path)
             except Exception as exc:
-                self.plan_error = str(exc)
+                self.plan_error = (PlayerArrayUnavailable if isinstance(exc, PlayerArrayUnavailable) else RuntimeError,
+                                   str(exc))
                 raise
             check()
             try:
@@ -181,7 +232,7 @@ class AutomaticHunt:
                 guid = struct.unpack_from('<Q', raw, 0xF0)[0]
                 current, maximum = struct.unpack_from('<2Q', raw, plan.health_offset)
                 level = struct.unpack_from('<I', raw, plan.level_offset)[0] if plan.level_offset is not None else None
-                slots = struct.unpack_from('<16I', raw, plan.stats)
+                slots = struct.unpack_from('<16I', raw, plan.stats) if plan.stats is not None else ()
                 if not (guid and 1 <= maximum <= 10**9 and current <= maximum
                         and (level is None or 1 <= level <= 10000) and all(v <= 1000000 for v in slots)):
                     return
@@ -189,7 +240,8 @@ class AutomaticHunt:
                 if (memory.read(game + plan.vector, 24) != header
                         or memory.read(game + plan.index, 8) != index):
                     return
-                found[hero_pointer] = dict(hero=hero_pointer, game=game, raw=raw, count=count, index=selected, name=name, pointer=pointer, level=level)
+                found[hero_pointer] = dict(hero=hero_pointer, game=game, raw=raw, count=count, index=selected,
+                                           name=name, pointer=pointer, level=level, slots=slots)
             except (OSError,ValueError,UnicodeError):
                 return
 
@@ -264,15 +316,14 @@ class AutomaticHunt:
             for offset, pair in pairs.items():
                 if old and offset in old['pairs'] and old['pairs'][offset][1] == pair[1]:
                     comparisons[offset] = 'changed' if pair[0] != old['pairs'][offset][0] else 'stable'
-            slots = struct.unpack_from('<16I', raw, plan.stats)
             heroes.append(dict(hero=pointer, game=item['game'], identity=identity,
                                level=item['level'],
                                count=item['count'], index=item['index'], name=item['name'], pointer=item['pointer'],
-                               pairs=pairs, comparisons=comparisons, slots=slots))
+                               pairs=pairs, comparisons=comparisons, slots=item['slots']))
         self.previous = {h['hero']: h for h in heroes}
         self.leases = [item['game'] for item in found.values()]
         return dict(build=plan.digest[:12], heroes=heroes, examined=examined, partial=partial,
-                    ambiguous=len(heroes) > 1)
+                    ambiguous=len(heroes) > 1, method=plan.method)
 
 
 class HuntSchedule:

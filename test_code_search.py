@@ -63,6 +63,15 @@ class CodeSearchTests(unittest.TestCase):
         clobbered = header() + b'\x45\x31\xe4' + resource[len(header()):]
         self.assertEqual(resource_serializers(clobbered, 0x1000, ARRAY, 0x18FC), [])
 
+    def test_resource_search_can_find_an_array_without_the_stat_serializer(self):
+        fields = b'\x49\x8d\x94\x24' + u(0x1908) + b'\x49\x81\xc4' + u(0x18FC)
+        raw = header() + b'\x85\xc0\x74\x20' + fields
+        result = resource_serializers(raw, 0x1000, None, 0x18FC)
+        self.assertEqual([(match.array, match.value) for match in result], [(ARRAY, 0x18FC)])
+        # A branch into the middle of the field-address sequence is ambiguous.
+        joining = header() + b'\x85\xc0\x74\x08' + fields
+        self.assertEqual(resource_serializers(joining, 0x1000, None, 0x18FC), [])
+
     def test_config_register_changes_are_independently_corroborated(self):
         blob = fixture(config=0x5018)
         code = memoryview(blob)[0x400:0x1400]

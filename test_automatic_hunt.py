@@ -5,8 +5,23 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from automatic_hunt import AutomaticHunt, HuntSchedule, SearchPlan, file_identity, make_plan
+from automatic_hunt import AutomaticHunt, HuntSchedule, PlayerArrayUnavailable, SearchPlan, file_identity, make_plan
+from hunt_freeze import HuntFreezer
+from test_code_search import header
 from test_compatibility import fixture
+from test_hunt_fields import resource_fixture
+
+
+def fallback_fixture():
+    blob = resource_fixture()
+    replacements = {0xF18: 0xE38, 0xC70: 0xB90, 0xC68: 0xB88, 0x1950: 0x1858}
+    identity = header()
+    for old, new in replacements.items():
+        identity = identity.replace(struct.pack('<I', old), struct.pack('<I', new))
+    identity += bytes.fromhex('4d89e54981c5e01000004531f64b83bc1ae0100000ff')
+    blob[0xC00:0xC00 + len(identity)] = identity
+    blob[0x680:0x700] = b'\x90' * 128
+    return blob
 
 
 class FakeMemory:
@@ -124,6 +139,57 @@ class AutomaticHuntTests(unittest.TestCase):
         blob[0xA00:0xA80]=blob[0x680:0x700]
         self.path.write_bytes(blob)
         with self.assertRaisesRegex(ValueError,'unique'):make_plan(self.path)
+
+    def test_missing_stat_serializer_recovers_character_and_applies_verified_gold(self):
+        blob = fallback_fixture()
+        self.path.write_bytes(blob)
+        self.plan, _ = make_plan(self.path)
+        self.assertEqual(self.plan.method, 'Identity and resources')
+        self.assertIsNone(self.plan.stats)
+        module = bytearray(0x6000)
+        module[0x1000:0x2000] = blob[0x400:0x1400]
+        module[0x5000:0x6000] = blob[0x1400:0x2400]
+        self.memory.regions[0x140000000] = module
+        struct.pack_into('<3Q', self.stack, self.plan.vector, 4, self.pointer, 1)
+        self.hero.extend(bytes(self.plan.stride - len(self.hero)))
+        struct.pack_into('<3Q', self.hero, self.plan.name, 4, 0x400000, 4)
+        self.memory.regions[0x400000] = b'Hero'
+        writes = []
+
+        def write(address, raw):
+            writes.append(address)
+            offset = address - self.pointer
+            self.hero[offset:offset + len(raw)] = raw
+
+        self.memory.write = write
+        freezer = HuntFreezer()
+        first = self.hunt.step(self.session, self.memory, stack_source=self.stacks)
+        self.assertEqual(first['heroes'][0]['name'], 'Hero')
+        self.assertEqual(freezer.observe(self.hunt, first), ())
+        second = self.hunt.step(self.session, self.memory, stack_source=self.stacks)
+        fields = freezer.observe(self.hunt, second)
+        self.assertEqual({field.key for field in fields}, {'health', 'max_health', 'run_gold', 'rerolls'})
+        outcome = freezer.apply(self.hunt, second, self.memory, fields, keys={'run_gold', 'damage'})
+        self.assertEqual(outcome['held'], {'run_gold': 99999999})
+        self.assertEqual(writes, [self.pointer + 0x15C])
+
+    def test_ambiguous_primary_uses_independent_evidence_to_choose_array(self):
+        blob = fallback_fixture()
+        block = fixture()[0x680:0x700]
+        blob[0x680:0x700] = block
+        blob[0xA00:0xA80] = block.replace(struct.pack('<I', 0xE38), struct.pack('<I', 0xE48))
+        self.path.write_bytes(blob)
+        plan, _ = make_plan(self.path)
+        self.assertEqual((plan.method, plan.index, plan.stats), ('Identity and resources', 0xE38, 0x1740))
+
+    def test_disagreeing_array_evidence_blocks_before_any_live_reads(self):
+        blob = fallback_fixture()
+        blob[0xC00:0xC80] = blob[0xC00:0xC80].replace(struct.pack('<I', 0xE38), struct.pack('<I', 0xE48))
+        self.path.write_bytes(blob)
+        for _ in range(2):  # Cached errors keep the same diagnostic category.
+            with self.assertRaisesRegex(PlayerArrayUnavailable, '0 corroborated'):
+                self.hunt.step(self.session, self.memory, stack_source=self.stacks)
+        self.assertEqual(self.memory.reads, [])
 
     def test_retry_backoff_is_bounded_and_resets_after_progress(self):
         schedule=HuntSchedule()

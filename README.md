@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.9.16
+# Azeroth Survivor Reborn Trainer 0.9.17
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -111,14 +111,18 @@ not insert effects, allocate game memory or change equipment. Table movement or
 a missing effect skips Echo while other stats remain held. Numeric matches
 alone never enable writes. The category rows distinguish active freezes from pending or unverified fields.
 
-Hunt independently finds the player-array serializer in the game executable,
-checks those instructions in the loaded image, and searches thread stacks for
-candidate solo array owners. It hunts integer value pairs and stat-block values
+Hunt first looks for the stat serializer in the game executable. If that search
+is missing or ambiguous, Hunt checks whether the character identity and typed
+resource routines agree on one player array. A fallback discovery can verify
+health, gold, and rerolls even when the combat-stat block cannot be verified.
+Hunt checks the corroborating instructions in the loaded image and searches
+thread stacks for the selected character. It hunts integer value pairs and stat-block values
 inside candidate allocations, then compares successive snapshots. Shared health
 header and integer-stat plausibility bounds narrow candidates; these heuristics
 do not establish named stat mappings. Independent per-field code evidence is
-required before each write. Changed types/headers can require detector
-updates. The current array-search strategy still requires a unique code anchor.
+required before each write. Changed types or headers can require detector updates.
+The search status distinguishes unavailable player arrays, pending session checks,
+and unavailable stat mappings. Advanced shows which detector located the array.
 
 Stack searches run in bounded background rounds (up to 8 MiB of stack content,
 with a 0.3-second scheduling target and bounded candidate probes). Partial rounds

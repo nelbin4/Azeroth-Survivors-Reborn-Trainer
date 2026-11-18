@@ -6,13 +6,13 @@ import queue
 import threading
 import time
 
-from automatic_hunt import AutomaticHunt, HuntSchedule, SearchPlan, file_identity, make_plan
+from automatic_hunt import AutomaticHunt, HuntSchedule, PlayerArrayUnavailable, SearchPlan, file_identity, make_plan
 from compatibility import Layout
 from hunt_fields import FieldProof
 from game_process import same_path
 from hunt_freeze import HuntFreezer
 from player import STATS
-from stats_model import StatsPolicy
+from stats_model import BY_KEY, StatsPolicy
 from session_role import RoleMonitor, RoleLease
 
 
@@ -33,7 +33,8 @@ def plan_from_layout(path,layout):
     if not guards or before!=file_identity(path):
         raise RuntimeError('Game image changed during legacy proof reuse.')
     rva,guard=guards[0]
-    return SearchPlan(layout.digest,layout.vector,layout.index,layout.stride,layout.stats,rva,guard,tuple(fields),layout.name,guards),before
+    return SearchPlan(layout.digest,layout.vector,layout.index,layout.stride,layout.stats,rva,guard,
+                      tuple(fields),layout.name,guards,method='Verified legacy layout'),before
 
 
 class StatsWorker:
@@ -66,6 +67,8 @@ class StatsWorker:
             fields=self.freezer.observe(self.hunt,result)
             role=current_role()
             result.update(values={},freeze=dict(held={},errors={}),role=role)
+            if fields or (self.freezer.complete and self.freezer.observations >= 2):
+                result['unmapped'] = BY_KEY.keys() - {proof.key for proof in fields}
             if not fields:return result
             owner=result['heroes'][0]
             result['owner']=(session,self.hunt.plan.digest,owner['hero'],owner['identity'],owner.get('count',1),owner.get('index',0),owner.get('name'))
@@ -193,9 +196,9 @@ class StatsController:
             if epoch==self.epoch:
                 expedite=False
                 if isinstance(result,Exception):
-                    self.last={}
+                    self.last={'array_error': str(result)} if isinstance(result, PlayerArrayUnavailable) else {}
                     self.policy.accept(None,{})
-                    self.message=f'Waiting to retry: {result}'
+                    self.message=('Player array unavailable for this build.' if self.last else f'Waiting to retry: {result}')
                 else:
                     old=set(self.policy.holds)
                     self.last=result
@@ -207,13 +210,18 @@ class StatsController:
                     who = f" · {selected.get('name') or 'player'}" if selected else ''
                     if selected.get('level') is not None:
                         who += f" (level {selected['level']})"
-                    if result.get('host_required'):self.message='Guest session: stat writes disabled.' if result.get('role')=='guest' else 'Waiting to verify a solo or host session.'
+                    if result.get('host_required'):self.message='Guest session: stat writes disabled.' if result.get('role')=='guest' else 'Stats found. Checking session role…'
                     elif self.policy.paused:self.message=f'Freezes stopped · {len(self.policy.verified)} verified stats.'
                     elif held:self.message=f'{held} stats frozen{who} · '+('Hunt continues in the background.' if self.policy.searching else 'Monitoring existing fields.')
                     elif successful:self.message=f'{len(successful)} stats applied{who} · checking persistence…'
                     elif self.policy.verified:self.message=f'{len(self.policy.verified)} verified stats available.'
                     elif result['ambiguous']:self.message='Multiple player allocations found; observing without writes.'
+                    elif 'unmapped' in result:self.message='Character verified. No stat mappings available for this build.'
+                    elif selected:self.message='Checking that the selected character is stable…'
                     else:self.message='Finding the selected player allocation…' if self.policy.searching else 'Click Find to locate the current player.'
+                    missing = len(result.get('unmapped', ()))
+                    if missing and self.policy.verified:
+                        self.message += f" {missing} {'stat' if missing == 1 else 'stats'} unavailable in this build."
                     if old!=self.policy.holds:expedite=True
                 delay=self.schedule.delay(result)
                 if not isinstance(result,Exception) and self.policy.pending&self.policy.verified:delay=min(delay,.25)

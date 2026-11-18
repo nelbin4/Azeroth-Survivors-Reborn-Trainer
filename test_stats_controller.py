@@ -5,6 +5,7 @@ import threading
 import unittest
 from unittest.mock import Mock,patch
 
+from automatic_hunt import PlayerArrayUnavailable
 from compatibility import resolve,NativeLayout
 from hunt_fields import FieldProof
 from stats_controller import StatsController,StatsWorker,plan_from_layout
@@ -64,6 +65,25 @@ class StatsControllerTests(unittest.TestCase):
         self.assertIn('damage',controller.policy.holds)
         self.assertEqual(controller.policy.values['damage'],7)
         thread.assert_called_once()
+
+    def test_find_reports_array_role_and_partial_mapping_as_distinct_stages(self):
+        controller = self.controller()
+        controller.worker = SimpleNamespace(mode=None)
+        controller.session = controller.session_provider()
+        controller.policy.searching = True
+        pending = dict(heroes=[{}], values={'run_gold': 17}, freeze=dict(held={}), partial=False,
+                       ambiguous=False, owner='hero', role='unknown', host_required=True, unmapped={'damage'})
+        with patch('stats_controller.threading.Thread'):
+            controller.results.put((controller.epoch, PlayerArrayUnavailable('No corroborated candidates.')))
+            controller.poll()
+            self.assertEqual(controller.message, 'Player array unavailable for this build.')
+            self.assertEqual(controller.last['array_error'], 'No corroborated candidates.')
+            controller.results.put((controller.epoch, pending))
+            controller.poll()
+            self.assertIn('Checking session role', controller.message)
+            controller.results.put((controller.epoch, dict(pending, role='none', host_required=False)))
+            controller.poll()
+            self.assertIn('1 stat unavailable', controller.message)
 
     def test_existing_holds_are_retried_after_read_error_even_with_search_stopped(self):
         controller=self.controller();session=controller.session_provider();controller.session=session

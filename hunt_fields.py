@@ -28,8 +28,8 @@ RESOURCE_LABELS = (b'\x04;ph=\xc0\x04;sl=\xc0\x05;lvl=\xc0\x07;kills=\xc0'
 RESOURCE_PREFIX = b'\x02t=\xc5 \x00\x00p\x01\x00'
 
 
-def discover_fields(blob, sections, code, text_rva, array, stats):
-    stride = array[3]
+def resource_candidates(blob, sections, code, text_rva, array=None, stats=None):
+    """Pair typed resource formatting with a selected-player resource routine."""
     def read(rva, size):
         for _, _, address, length, offset in sections:
             if address <= rva and rva + size <= address + length:
@@ -59,6 +59,7 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
         return None
 
     candidates = []
+    anchors = {}
     for base in (3, 5, 6, 7):
         # Match the argument setup, then derive the offsets from the named
         # formatter slots. The compiler can move level and gold together.
@@ -106,15 +107,15 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
                     addresses = {}
                     guards = {start:raw[:ins.address + ins.size - start],
                               description[1]:metadata[:position + len(RESOURCE_LABELS)]}
-                    expected = {'level':(3,None,'I'), 'run_gold':(5,None,'I'), 'health':(7,None,'Q'),
-                                'max_health':(8,None,'Q'), 'rerolls':(11,None,'I')}
-                    for key,(index,offset,fmt) in expected.items():
+                    expected = {'level':(3,'I'), 'run_gold':(5,'I'), 'health':(7,'Q'),
+                                'max_health':(8,'Q'), 'rerolls':(11,'I')}
+                    for key,(index,fmt) in expected.items():
                         slot = (args[1], args[2] + index * 16)
                         field, callback = stack.get(slot), stack.get((slot[0],slot[1]+8))
-                        if not field or field[0] != 'field' or (offset is not None and field[1] != offset):
+                        if not field or field[0] != 'field':
                             continue
                         actual = field[1]
-                        if not 0 <= actual <= stride - struct.calcsize(fmt) or actual % struct.calcsize(fmt):
+                        if not 0 <= actual <= 0x10000 - struct.calcsize(fmt) or actual % struct.calcsize(fmt):
                             continue
                         addresses[key] = actual
                         proof = scalar_formatter(callback, struct.calcsize(fmt))
@@ -132,11 +133,21 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
                     if 'rerolls' not in addresses:
                         break
                     rr = addresses['rerolls']
-                    independent = resource_serializers(code,text_rva,array,rr)
-                    if len(independent) != 1 or not stats + 64 <= rr <= stride - 16:
+                    if stats is not None and rr < stats + 64:
                         break
-                    guards[independent[0].rva] = independent[0].raw
-                    candidates.append((fields,guards))
+                    if rr not in anchors:
+                        if len(anchors) == 16:
+                            return ()
+                        anchors[rr] = resource_serializers(code, text_rva, array, rr)
+                    for anchor in anchors[rr]:
+                        bounded = {key: (offset, fmt) for key, (offset, fmt) in fields.items()
+                                   if offset + struct.calcsize(fmt) <= anchor.stride}
+                        evidence = {**guards, anchor.rva: anchor.raw}
+                        proofs = tuple(FieldProof(key, offset, fmt, maximum_for(key), tuple(evidence.items()))
+                                       for key, (offset, fmt) in bounded.items())
+                        candidates.append((anchor, proofs))
+                        if len(candidates) > 16:
+                            return ()
                     break
                 if ins.mnemonic.startswith('j') or ins.mnemonic == 'ret':
                     break
@@ -161,12 +172,25 @@ def discover_fields(blob, sections, code, text_rva, array, stats):
                 if ops and ops[0].type == X86_OP_REG and value is not None:
                     registers[register_family(ins,ops[0].reg)] = value
 
-    result = []
-    if len(candidates) == 1:
-        fields,guards = candidates[0]
-        for key,(offset,fmt) in fields.items():
-            maximum = {'health': 1000000, 'level': 10000}[key] if key in ('health','level') else STATS[key].maximum
-            result.append(FieldProof(key,offset,fmt,maximum,tuple(guards.items())))
+    return candidates
+
+
+def maximum_for(key):
+    if key == 'health':
+        return 1000000
+    if key == 'level':
+        return 10000
+    return STATS[key].maximum
+
+
+def discover_fields(blob, sections, code, text_rva, array, stats, *, resources=None):
+    if resources is None:
+        candidates = resource_candidates(blob, sections, code, text_rva, array, stats)
+        resources = candidates[0][1] if len(candidates) == 1 else ()
+    result = list(resources)
+    if stats is None:
+        return tuple(result)
+    stride = array[3]
     try:
         fields,guards = discover_stat_fields(blob,sections,code,text_rva)
         for key,relative in fields.items():

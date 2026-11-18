@@ -203,8 +203,10 @@ class StatsPanel:
             self.search_started = time.monotonic()
 
         found = active and bool(controller.policy.verified)
-        checking_role = found and controller.role == 'unknown'
-        working = active and (not found or checking_role)
+        result = controller.last
+        blocked = bool(result.get('array_error') or (result.get('unmapped') and not found))
+        checking_role = found and result.get('role', controller.role) == 'unknown'
+        working = active and not blocked and (not found or checking_role)
         if working != self.progress_running:
             self.search_progress.stop()
             self.progress_running = working
@@ -215,7 +217,16 @@ class StatsPanel:
                 self.search_progress.configure(mode='determinate')
         if not working:
             self.search_progress.configure(value=100 if found else 0)
-            self.search_hint.set('Stats found. Hunt is monitoring in the background.' if found else '')
+            hint = ''
+            if active and result.get('array_error'):
+                hint = 'Waiting for a different game build.'
+            elif active and blocked:
+                hint = 'See Advanced for detection details.'
+            elif found and result.get('unmapped'):
+                hint = 'Hunt continues to monitor verified stats.'
+            elif found:
+                hint = 'Stats found. Hunt is monitoring in the background.'
+            self.search_hint.set(hint)
             return
 
         elapsed = int(time.monotonic() - self.search_started)
@@ -244,7 +255,8 @@ class StatsPanel:
                              state='normal' if connected and (policy.paused or policy.searching or policy.holds) else 'disabled')
 
         freeze = last.get('freeze', {})
-        read_only = controller.role in ('unknown', 'guest') or last.get('host_required')
+        role = last.get('role', controller.role)
+        read_only = role in ('unknown', 'guest') or last.get('host_required')
         for view in VIEWS:
             key = view.key
             frozen = key in policy.holds
@@ -254,10 +266,12 @@ class StatsPanel:
                 target = '≥ ' + target
             state = 'Searching' if policy.searching else 'Not found'
             enabled = key in policy.enabled
-            if not enabled and key not in policy.pending:
+            if key in last.get('unmapped', ()):
+                state = 'Unavailable'
+            elif not enabled and key not in policy.pending:
                 state = 'Manual'
             elif read_only and known:
-                state = 'Checking role' if controller.role == 'unknown' else 'Read-only'
+                state = 'Checking role' if role == 'unknown' else 'Read-only'
             elif policy.paused and enabled:
                 state = 'Stopped'
             elif key in freeze.get('errors', {}):
@@ -285,8 +299,11 @@ class StatsPanel:
         if enabled:
             self.help.set(freeze.get('errors', {}).get(view.key) or 'Checked stats freeze at maximum.')
         can_apply = view.key in policy.verified and not read_only
+        unavailable = view.key in last.get('unmapped', ())
+        if unavailable:
+            self.help.set('Hunt could not verify this stat on the current build.')
         self.apply_button.configure(text='Apply' if can_apply else 'Queue target',
-                                    state='disabled' if enabled else 'normal')
+                                    state='disabled' if enabled or unavailable else 'normal')
 
         if self.advanced is not None and self.advanced.winfo_exists():
             self.refresh_detection_details(connected_session)
@@ -310,6 +327,7 @@ class StatsPanel:
         fields = {
             'Game process': f'PID {session.pid}' if session else 'Disconnected',
             'Build': result.get('build') or '—',
+            'Player array': 'Unavailable' if result.get('array_error') else result.get('method', '—'),
             'Character': name,
             'Session': roles.get(controller.role, 'Checking session role') if session else '—',
             'Verified stats': f'{len(policy.verified)} of {len(VIEWS)}',
@@ -320,6 +338,8 @@ class StatsPanel:
         errors = freeze.get('errors', {})
         warnings = [f'{BY_KEY[key].label}: {message}' for key, message in errors.items()
                     if key in policy.enabled or key in policy.pending]
+        if result.get('array_error'):
+            warnings.insert(0, result['array_error'])
         if result.get('ambiguous'):
             warnings.insert(0, 'Multiple player allocations found. Writes are blocked until the character is verified.')
         if warnings:

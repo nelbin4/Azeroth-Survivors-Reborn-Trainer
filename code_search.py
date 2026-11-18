@@ -306,22 +306,28 @@ def name_serializers(code, text_rva, expected):
 
 def resource_serializers(code, text_rva, expected, rerolls):
     results = []
-    for match in _matches(sequence(*HEADER), code, b'\x8b', require_w=True, offset=expected[0]):
+    offset = expected[0] if expected is not None else None
+    for match in _matches(sequence(*HEADER), code, b'\x8b', require_w=True, offset=offset):
         rva = text_rva + match.start()
         prefix = _decode(match.group(), rva)
         header = _header(prefix)
-        if not header or header[0] != expected:
+        if not header or (expected is not None and header[0] != expected):
             continue
-        _, registers = header
+        array, registers = header
         heroes = {register for register, value in registers.items() if value == 'hero'}
         decoder = _decoder()
         start = match.end()
         suffix = list(decoder.disasm(code[start:start + 192], text_rva + start))
         suffix = [i for i in suffix if i.mnemonic != 'nop']
+        branch_targets = []
         for number, ins in enumerate(suffix[:-1]):
-            if ins.mnemonic == 'call':
+            if ins.mnemonic in ('call', 'ret', 'jmp') or ins.mnemonic.startswith('loop'):
                 break
             ops = ins.operands
+            if ins.mnemonic.startswith('j'):
+                if len(ops) != 1 or ops[0].type != X86_OP_IMM or ops[0].imm <= ins.address:
+                    break
+                branch_targets.append(ops[0].imm)
             if (ins.mnemonic == 'lea' and len(ops) == 2 and ops[0].type == X86_OP_REG
                     and ops[0].reg not in heroes and ops[1].type == X86_OP_MEM
                     and ops[1].mem.base in heroes and not ops[1].mem.index and ops[1].mem.disp == rerolls + 12):
@@ -331,7 +337,8 @@ def resource_serializers(code, text_rva, expected, rerolls):
                         and operands[0].reg == ops[1].mem.base and operands[1].type == X86_OP_IMM
                         and operands[1].imm == rerolls):
                     end = following.address + following.size - text_rva
-                    results.append(CodeMatch(*expected, rerolls, rva, code[match.start():end]))
+                    if rerolls <= array[3] - 16 and all(target >= text_rva + end for target in branch_targets):
+                        results.append(CodeMatch(*array, rerolls, rva, code[match.start():end]))
                     break
             for register in ins.regs_access()[1]:
                 name = register_family(ins, register)
