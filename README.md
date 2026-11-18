@@ -1,23 +1,18 @@
-# Azeroth Survivor Reborn Trainer 0.9.17
+# Azeroth Survivor Reborn Trainer
 
-Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
-original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
-`6c2b16d2b363` executable layouts.
-The `d79ca7e2a239` build uses automatic Hunt holds for combat and resources.
-A separate trainer for **[Azeroth Survivors: Reborn](https://azreborn.com/)**.
-Reborn is a different game fork with its own executable, player layout and save
-format. This repository has independent releases and version history.
-Derived from the process validation and recovery approach of
-[Azeroth Survivors Trainer](https://github.com/nelbin4/Azeroth-Survivors-Trainer).
+Portable Windows trainer for [Azeroth Survivors: Reborn](https://azreborn.com/).
+Find adjusts verified stats for your selected character in solo runs and
+verified co-op host sessions.
 
-Download the portable zip from [Reborn Trainer Releases](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases),
-extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. If the game is
-closed, click **Run Game**. Start a solo run in the game,
-then click **Find** in the trainer. This starts automatic background Hunt.
-The default enabled stats are Damage bonus, Cooldown reduction, Area of effect,
-and Luck bonus. Checked stats apply and freeze at their maximums as soon as
-Hunt verifies them. Selections and targets are stored locally in
-`reborn-settings.json`. Keep the trainer open for active freezes.
+## Quick start
+
+1. Download and extract the portable ZIP, then open **Azeroth Survivor Reborn Trainer.exe**. [Latest release](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases/latest)
+2. Click **Run Game** or open Reborn yourself. Start a run and wait for the trainer to show the connected game process.
+3. Click **Find**. Hunt searches in the background. Each checked stat applies and freezes at the trainer limit as soon as Hunt verifies the character, session, and stat.
+
+Damage bonus, Cooldown reduction, Area of effect, and Luck bonus are checked by default.
+Selections and manual targets are stored locally in `reborn-settings.json`.
+Keep the trainer open for active freezes.
 
 ## Launch and process controls
 
@@ -32,12 +27,9 @@ automatically detected. With several instances, the saved executable path can
 select a unique instance; ambiguous instances are never attached or stopped.
 An inaccessible process also blocks a duplicate launch.
 
-**Stop game** terminates only the selected, revalidated process after a confirmation
-showing its PID and path. Unsaved run progress can be lost. The trainer first
-stops holds and restores eligible changes when attached. Stop remains available
-when memory-layout detection fails; no game compatibility checks are bypassed.
-Run becomes available again after the process exits. Closing the trainer alone
-leaves the game running.
+**Stop Game** closes the selected game process after a confirmation showing
+its PID and path. Unsaved run progress can be lost. Closing the trainer leaves
+Reborn running and ends active holds.
 
 ## Stats interface and recovery
 
@@ -57,6 +49,23 @@ reapplies the checked stats.
 copies the displayed text. The other tab is Manual value search.
 
 Game, build, and player ownership changes invalidate stale results before any further write.
+
+## Troubleshoot missing stats
+
+Open **Advanced → Detection details** and check **Character**, **Session**, and
+**Verified stats** together. Find needs a live selected character and a verified
+solo or host session before it can apply changes.
+
+| What you see | What it means |
+| --- | --- |
+| **Finding the selected player allocation** | Hunt is still looking for a live character. Start a run if you're at the dashboard. |
+| **Stats found. Checking session role** | Hunt found stat mappings and is waiting for live lobby verification. Co-op writes require the game to report this client as host. |
+| **Guest · read-only** | The game reports this client as a guest. If the in-game lobby shows you as host, capture that indicator and the detection details from the same run. |
+| **Player array unavailable** | Hunt could not corroborate a unique player array for this build. Waiting on the same executable will not change that result. |
+| **Some stats are Unavailable** | Hunt can apply mapped stats. The remaining fields need game-build support. |
+
+When reporting an issue, include the trainer version, whether the run was solo
+or co-op, and the output from **Copy details**.
 
 ## Trainer updates
 
@@ -88,14 +97,14 @@ It uses the same Stats interface on supported older layouts and newer
 independently proven layouts, and discards stale results after process changes.
 
 Checked stats freeze at maximum as soon as they are verified.
-After a complete initial search and two stable observations of one solo owner,
+After a complete initial search and two stable observations of the selected character,
 each independently proven field is maximized and held without waiting for the
 remaining fields. Holds run every half-second and skip unchanged values. Search
 continues while established holds remain active. Uncheck a stat or use Stop Freeze
 to suspend holds. Values already applied stay in place, including
-when the trainer closes. Hunt does not add changes to the normal Restore journal.
+when the trainer closes, until the game recalculates them or the run ends.
 
-The running `d79ca7e2a239` build independently proves maximum health, current
+The `d79ca7e2a239` build independently proves maximum health, current
 health, run gold and rerolls through the named resource formatter, its integer
 formatter widths, and a second serializer using the same player array. These
 fields are joined by all 12 combat/utility stats through the newer compact named
@@ -109,12 +118,14 @@ is present, Hunt maxes its chance to 100% and revalidates the table header, key
 and bucket before writes. It keeps hunting when the entry is absent; it does
 not insert effects, allocate game memory or change equipment. Table movement or
 a missing effect skips Echo while other stats remain held. Numeric matches
-alone never enable writes. The category rows distinguish active freezes from pending or unverified fields.
+alone never enable writes. The Stats table distinguishes active freezes from pending or unverified fields.
 
 Hunt first looks for the stat serializer in the game executable. If that search
 is missing or ambiguous, Hunt checks whether the character identity and typed
 resource routines agree on one player array. A fallback discovery can verify
 health, gold, and rerolls even when the combat-stat block cannot be verified.
+In v0.9.17, this fallback recovered those mappings from a test copy of build
+`950599aec161` with the primary signature removed.
 Hunt checks the corroborating instructions in the loaded image and searches
 thread stacks for the selected character. It hunts integer value pairs and stat-block values
 inside candidate allocations, then compares successive snapshots. Shared health
@@ -148,7 +159,7 @@ background and validate the PID, creation time and executable path.
 Manual searches and unmapped candidates are read-only. A numeric match, even a
 single one, does not establish an authoritative player field. Verified Hunt
 freezes recheck executable identity, loaded code, the selected process, solo
-ownership, hero identity and level before writes. A field-specific proof failure
+or verified host ownership, hero identity and level before writes. A field-specific proof failure
 skips that field; ownership changes stop the batch. A per-process writer lock
 prevents competing trainers from writing at once. No addresses are saved across
 sessions and Hunt does not edit saves. On `d79ca7e2a239`, the old full Player/name
@@ -183,11 +194,9 @@ instruction proofs instead of repeating disassembly. Loaded instructions and her
 identity are still rechecked before writes.
 
 Instruction searches accept verified register allocations, short/near bounds
-branches, alignment NOPs and reordered vector loads. Configuration candidates must
-agree with their initialization/speed readers and a constructor's related flag
-stores. Solo discovery supports bounded vector capacities through 64 while still
-requiring exactly one active hero; multiple players remain blocked. Duplicate stack references to one hero are
-grouped by allocation and identity. Distinct hero allocations remain blocked.
+branches, alignment NOPs and reordered vector loads. Hunt groups duplicate stack
+references by character allocation and identity. Distinct allocations keep
+writes blocked until Hunt can identify the selected character.
 Hold polling skips unchanged values and uses no injected code.
 
 ## Player controls
@@ -200,7 +209,7 @@ trainer limits; they are not a claim that every value has a native maximum.
 | --- | ---: |
 | Damage bonus | 9,999% |
 | Cooldown reduction | 80% native cap |
-| Crit bonus | 92% plus the native 8% base |
+| Critical strike | 100%, including the native 8% base |
 | Crit damage bonus | 9,999% plus the native 50% base |
 | Movement speed bonus | 200% |
 | Damage reduction | 60% native cap |
@@ -209,6 +218,7 @@ trainer limits; they are not a claim that every value has a native maximum.
 | Gold find bonus | 9,999% |
 | Area bonus | 1,000% |
 | Extra targets | 32 |
+| Echo chance | 100% while the Echo effect is active |
 | Luck bonus | 9,999% |
 | Maximum/current health | 1,000,000 |
 | Run gold | 99,999,999 |
@@ -216,7 +226,7 @@ trainer limits; they are not a claim that every value has a native maximum.
 
 Holds reapply after native recalculations. Uncheck Current health and press Apply to heal to full once.
 
-After Find, Hunt follows new runs and validates their fresh solo ownership before
+After Find, Hunt follows new runs and verifies the selected character and session before
 resuming eligible holds. Stop search does not locate a new allocation until Find
 is used again or an unverified stat is enabled while connected. Stop Freeze leaves
 configured targets intact. Use Resume Freeze to reapply enabled holds.
@@ -228,7 +238,7 @@ Stat values can persist until the game recalculates them or the run ends.
 Originally verified executable SHA-256:
 `ab7b6332a6c47e4c29188e44932939e560b274cf06e0f212cb3ada119a3a3d35`.
 The trainer records the executable hash and checks discovered instruction signatures, process identity,
-solo allocation, character GUID/name and readback before accepting writes.
+the selected character and session, and verifies changes by reading them back.
 Unverified or ambiguous field mappings are blocked. Player discovery reads thread stacks without hooks.
 No game executable files are patched. Separate from the original game's trainer.
 
@@ -237,22 +247,20 @@ No game executable files are patched. Separate from the original game's trainer.
 ```powershell
 pip install -r requirements.txt
 python trainer.py
-python trainer.py --max-player
 python -m unittest discover -s . -p "test_*.py"
 pip install pyinstaller
 python build_exe.py
 ```
 
-Portable release includes the standalone executable, README and MIT license.
-The trainer uses psutil and Capstone; the portable build includes both.
-Unofficial fan tool. MIT license; see LICENSE.
-
+The portable ZIP includes the standalone executable, README, and MIT license.
 
 ### Selected-player validation and host sessions
 
 Hunt verifies the selected character's live identity string using corroborating code proofs. Names are read dynamically; no test character name is hardcoded. The scan resumes at the exact candidate after its probe budget is exhausted, so dense stacks do not hide the active player array.
 
-**Host session (automatic)** follows the game's live lobby role. It checks itself for a verified host and clears itself for a guest or a solo/no-lobby session. Guests and unknown roles cannot authorize stat writes, including a guest currently alone in a player array. There is no manual host override. Only the character selected by the verified game index is eligible; other party members are left alone.
+Host detection follows the game's live lobby role. A verified host session allows
+changes to the host's selected character. Guest and unverified sessions stay
+read-only, even if the selected character is the only player found.
 
 Role discovery runs read-only in the background when the game is detected. A cold scan or a UI runtime reload may take longer on processes with large memory footprints; the UI stays responsive and stat writes wait for verification. A process-bound address cache is always revalidated against the live Lua main thread, global environment and current lobby table. Runtime, PID, global-table and lobby changes invalidate old ownership. Role is checked again before every stat write. Find still starts stat discovery and automatic max/freeze.
 
