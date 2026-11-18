@@ -66,9 +66,6 @@ class StatsPanel:
             self.table.column(column, width=width, minwidth=48, anchor=anchor, stretch=column == 'stat')
         for view in VIEWS:
             self.table.insert('', 'end', iid=view.key, values=(view.label,))
-        scroll = ttk.Scrollbar(listing, orient='vertical', command=self.table.yview)
-        scroll.pack(side='right', fill='y')
-        self.table.configure(yscrollcommand=scroll.set)
         self.table.pack(side='left', fill='both', expand=True)
         self.table.bind('<<TreeviewSelect>>', self.selection_changed)
         self.table.bind('<Button-1>', self.toggle_row_enabled)
