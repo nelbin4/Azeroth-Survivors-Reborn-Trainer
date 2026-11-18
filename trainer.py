@@ -22,7 +22,7 @@ import psutil
 from compatibility import resolve, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.9.15'
+VERSION = '0.9.16'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 
@@ -187,6 +187,9 @@ def run_gui():
 
     root = tk.Tk()
     root.title(APP_NAME)
+    logo_path = Path(__file__).resolve().parent / 'assets' / 'trainer-logo.png'
+    logo = tk.PhotoImage(master=root, file=str(logo_path))
+    root.iconphoto(True, logo)
     root.geometry('1010x810')
     root.resizable(False, False)
     root.configure(bg='#14202c')
@@ -218,6 +221,7 @@ def run_gui():
     body.pack(fill='both', expand=True)
     header = ttk.Frame(body)
     header.pack(fill='x', pady=(0, 8))
+    ttk.Label(header, image=logo).pack(side='left', padx=(0, 10))
     ttk.Label(header, text='AZEROTH SURVIVORS REBORN', foreground='#e3be69', font=('Segoe UI', 20, 'bold')).pack(side='left')
     status = tk.StringVar(value='Waiting for Azeroth Survivors: Reborn.')
     detail = tk.StringVar(value='')

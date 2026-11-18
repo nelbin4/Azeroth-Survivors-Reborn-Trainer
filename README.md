@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.9.15
+# Azeroth Survivor Reborn Trainer 0.9.16
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -42,7 +42,7 @@ leaves the game running.
 ## Stats interface and recovery
 
 **Stats** shows current values, targets, freeze settings and status in one
-table. Select a row to edit it in the side panel. All stats are shown in one table.
+table. Select a row to edit it in the side panel.
 Click a row’s **Freeze** checkbox or press Space on that row. Checked stats
 apply their maximum and hold it once verified. Unchecked stats can be changed
 once by editing the target and pressing **Apply**. **Use maximum** fills the
@@ -83,16 +83,16 @@ is intact; v0.6.4 fixes subsequent update restarts.
 ### Hunt values on an unsupported build
 
 **Find** starts automatic background Hunt for the selected game process.
-No numeric values need to be entered. It keeps running when another tab is selected, without
-taking focus from the game. It uses the same Stats interface on supported older layouts and newer
+No numeric values need to be entered. Hunt runs without taking focus from the game.
+It uses the same Stats interface on supported older layouts and newer
 independently proven layouts, and discards stale results after process changes.
 
 Checked stats freeze at maximum as soon as they are verified.
 After a complete initial search and two stable observations of one solo owner,
 each independently proven field is maximized and held without waiting for the
 remaining fields. Holds run every half-second and skip unchanged values. Search
-continues while established holds remain active. Uncheck this option or pause
-Automatic Hunt to stop writes; values already applied stay in place, including
+continues while established holds remain active. Uncheck a stat or use Stop Freeze
+to suspend holds. Values already applied stay in place, including
 when the trainer closes. Hunt does not add changes to the normal Restore journal.
 
 The running `d79ca7e2a239` build independently proves maximum health, current
@@ -241,7 +241,6 @@ python build_exe.py
 
 Portable release includes the standalone executable, README and MIT license.
 The trainer uses psutil and Capstone; the portable build includes both.
-Research helpers additionally require numpy.
 Unofficial fan tool. MIT license; see LICENSE.
 
 

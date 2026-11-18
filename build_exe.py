@@ -15,6 +15,7 @@ def main(release_dir=None):
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
                '--onefile', '--noconsole', '--name', NAME,
                '--icon', str(ROOT / 'assets/trainer-icon.ico'),
+               '--add-data', f'{ROOT / "assets/trainer-logo.png"}:assets',
                '--distpath', str(ROOT / 'dist'), '--workpath', str(ROOT / 'build'),
                '--specpath', str(ROOT / 'build'), str(ROOT / 'trainer.py')]
     subprocess.run(command, check=True)
