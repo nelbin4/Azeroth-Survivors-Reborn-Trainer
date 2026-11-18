@@ -22,7 +22,7 @@ import psutil
 from compatibility import resolve, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.9.12'
+VERSION = '0.9.13'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 SETTINGS = ROOT / 'reborn-settings.json'
 
@@ -219,7 +219,6 @@ def run_gui():
     header = ttk.Frame(body)
     header.pack(fill='x', pady=(0, 8))
     ttk.Label(header, text='AZEROTH SURVIVORS REBORN', foreground='#e3be69', font=('Segoe UI', 20, 'bold')).pack(side='left')
-    ttk.Label(header, text=f'v{VERSION}', foreground='#a9b8c8').pack(side='left', padx=16)
     status = tk.StringVar(value='Waiting for Azeroth Survivors: Reborn.')
     detail = tk.StringVar(value='')
     ttk.Label(body, textvariable=status, font=('Segoe UI', 10), foreground='#76dfc1', wraplength=1030).pack(anchor='w', pady=(0, 6))
@@ -239,15 +238,23 @@ def run_gui():
     except (OSError, ValueError):
         saved = {}
 
+    if not isinstance(saved, dict):
+        saved = {}
+
     def error(exc):
         logging.exception('Trainer operation failed')
         status.set(str(exc))
 
-    from stats_panel import StatsPanel
-    stats_panel = StatsPanel(root, stats_area, lambda: launcher.session, lambda: trainer, lambda: closing)
+    def save_stat_preferences(preferences):
+        saved['stats'] = preferences
+        atomic_json(SETTINGS, saved)
 
-    actions = ttk.Frame(body)
-    actions.pack(fill='x')
+    from stats_panel import StatsPanel
+    stats_panel = StatsPanel(root, stats_area, lambda: launcher.session, lambda: trainer,
+                             lambda: closing, saved.get('stats'), save_stat_preferences)
+
+    footer = ttk.Frame(body, padding=(0, 8, 0, 0))
+    footer.pack(fill='x')
 
     def disconnect_game():
         nonlocal trainer, connection_generation, connecting
@@ -279,7 +286,7 @@ def run_gui():
                 saved['game_exe'] = path
                 atomic_json(SETTINGS, saved)
                 next_process_scan = 0
-                status.set('Game executable saved. Use Run Azeroth Survivors Reborn to launch it.')
+                status.set('Game executable saved. Use Run Game to launch it.')
         except Exception as exc:
             error(exc)
 
@@ -325,13 +332,12 @@ def run_gui():
             next_process_scan = 0
             error(exc)
 
-    run_button = ttk.Button(actions, text='Run Azeroth Survivors Reborn', command=run_game, style='Accent.TButton')
-    run_button.pack(side='left', padx=(0, 8))
-    stop_button = ttk.Button(actions, text='Stop game', command=stop_game, state='disabled')
-    stop_button.pack(side='left', padx=(0, 8))
-    ttk.Button(actions, text='Game executable…', command=locate).pack(side='left')
-    process_status = tk.StringVar(value='Checking game processes…')
-    ttk.Label(actions, textvariable=process_status, foreground='#a9b8c8', wraplength=230).pack(side='left', padx=12)
+    run_button = ttk.Button(footer, text='Run Game', command=run_game, style='Accent.TButton')
+    run_button.pack(side='left', fill='y', padx=(0, 8))
+    stop_button = ttk.Button(footer, text='Stop Game', command=stop_game, state='disabled')
+    stop_button.pack(side='left', fill='y', padx=(0, 8))
+    ttk.Button(footer, text='Locate exe file', command=locate).pack(side='left', fill='y', padx=(0, 8))
+    ttk.Button(footer, text='Advanced', command=stats_panel.open_advanced).pack(side='left', fill='y', padx=(0, 8))
     update_results = queue.Queue()
     update_busy = False
     latest_release = None
@@ -379,12 +385,11 @@ def run_gui():
         else:
             check_updates()
 
-    footer = ttk.Frame(body, padding=(0, 10, 0, 0))
-    footer.pack(fill='x')
     update_button = ttk.Button(footer, text='Check updates', command=update_action)
-    update_button.pack(side='left', padx=(0, 8))
-    ttk.Button(footer, text='Github Page', command=lambda: webbrowser.open(updater.PROJECT)).pack(side='left')
-    ttk.Label(footer, textvariable=update_status, foreground='#76dfc1', wraplength=540).pack(side='left', padx=12)
+    update_button.pack(side='left', fill='y', padx=(0, 8))
+    ttk.Button(footer, text='Github Page', command=lambda: webbrowser.open(updater.PROJECT)).pack(side='left', fill='y')
+    ttk.Label(footer, textvariable=update_status, foreground='#76dfc1', wraplength=200).pack(side='right', padx=(8, 0))
+    ttk.Label(footer, text=f'v{VERSION}', foreground='#a9b8c8').pack(side='right', padx=(8, 0))
     root.after_idle(check_updates)
 
     def connect_worker(session, generation):
@@ -411,15 +416,10 @@ def run_gui():
             next_process_scan = now + 2
         run_button.configure(state='disabled' if launcher.running else 'normal')
         stop_button.configure(state='normal' if launcher.session else 'disabled')
-        if launcher.session:
-            extra = f' · {len(launcher.sessions)} instances' if len(launcher.sessions) > 1 else ''
-            process_status.set(f'Running · PID {launcher.session.pid}{extra}')
-        elif launcher.unreadable:
-            process_status.set('Running process inaccessible')
-        elif launcher.sessions:
-            process_status.set('Multiple games · choose executable')
-        else:
-            process_status.set('Game is not running')
+        if not launcher.session and launcher.unreadable:
+            status.set('Running process inaccessible.')
+        elif not launcher.session and launcher.sessions:
+            status.set('Multiple games running. Use Locate exe file.')
         try:
             kind, result = update_results.get_nowait()
             update_busy = False
@@ -430,7 +430,7 @@ def run_gui():
                 update_status.set('Update failed. Try again.')
             elif kind == 'check':
                 latest_release = result
-                update_status.set(f"Update available: {result['tag']}" if result['available'] else f'Up to date · v{VERSION}')
+                update_status.set(f"Update available: {result['tag']}" if result['available'] else 'Up to date')
             else:
                 try:
                     updater.launch_install(result)

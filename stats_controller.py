@@ -118,13 +118,13 @@ class StatsWorker:
 
 
 class StatsController:
-    def __init__(self,root,session_provider,native_provider,closing,on_change=lambda:None):
+    def __init__(self,root,session_provider,native_provider,closing,on_change=lambda:None,preferences=None):
         self.root=root
         self.session_provider=session_provider
         self.native_provider=native_provider
         self.closing=closing
         self.on_change=on_change
-        self.policy=StatsPolicy()
+        self.policy=StatsPolicy(preferences)
         self.worker=StatsWorker()
         from trainer import ROOT
         self.role_monitor=RoleMonitor(ROOT/'reborn-role-cache.json')
@@ -172,16 +172,8 @@ class StatsController:
 
     def pause(self):
         self.policy.paused=not self.policy.paused
-        self.message='Freezes paused; discovery continues.' if self.policy.paused else 'Freezes resumed.'
+        self.message='Stat freezes stopped.' if self.policy.paused else 'Stat freezes resumed.'
         self.changed()
-
-    def maximize(self):
-        self.policy.maximize()
-        self.message='Maximum targets queued for verified fields.'
-        if self.connected_session() and not self.policy.verified:
-            self.find()
-        else:
-            self.changed()
 
     def close(self):
         self.closed=True;self.cancel.set();self.role_monitor.close()
@@ -237,7 +229,7 @@ class StatsController:
                     if selected.get('level') is not None:
                         who += f" (level {selected['level']})"
                     if result.get('host_required'):self.message='Guest session: stat writes disabled.' if result.get('role')=='guest' else 'Waiting to verify a solo or host session.'
-                    elif self.policy.paused:self.message=f'Freezes paused · {len(self.policy.verified)} verified stats.'
+                    elif self.policy.paused:self.message=f'Freezes stopped · {len(self.policy.verified)} verified stats.'
                     elif held:self.message=f'{held} stats frozen{who} · '+('Hunt continues in the background.' if self.policy.searching else 'Monitoring existing fields.')
                     elif successful:self.message=f'{len(successful)} stats applied{who} · checking persistence…'
                     elif self.policy.verified:self.message=f'{len(self.policy.verified)} verified stats available.'

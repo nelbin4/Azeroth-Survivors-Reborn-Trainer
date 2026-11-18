@@ -46,19 +46,33 @@ VIEWS = tuple(StatView(*row) for row in (
     ('rerolls','Rerolls','Resources',0,9999),
 ))
 BY_KEY={view.key:view for view in VIEWS}
+DEFAULT_ENABLED = frozenset({'damage', 'cooldown', 'area', 'luck'})
 
 
 class StatsPolicy:
-    def __init__(self):
-        self.targets={v.key:v.maximum for v in VIEWS}
-        self.enabled = set(BY_KEY)
+    def __init__(self, preferences=None):
+        if not isinstance(preferences, dict):
+            preferences = {}
+        self.targets = {view.key: view.maximum for view in VIEWS}
+        saved_enabled = preferences.get('enabled')
+        self.enabled = ({key for key in saved_enabled if isinstance(key, str) and key in BY_KEY}
+                        if isinstance(saved_enabled, list) else set(DEFAULT_ENABLED))
+        saved_targets = preferences.get('targets')
+        if isinstance(saved_targets, dict):
+            for key, value in saved_targets.items():
+                if key not in BY_KEY or type(value) is not int or key == 'health':
+                    continue
+                try:
+                    BY_KEY[key].native(value)
+                except (ValueError, OverflowError):
+                    continue
+                self.targets[key] = value
         self.holds=set()
         self.overrides=set()
         self.pending=set()
         self.verified=set()
         self.values={}
         self.owner=None
-        self.auto=True
         self.paused=False
         self.searching=False
         self.xp=False
@@ -70,8 +84,7 @@ class StatsPolicy:
             self.verified.clear()
             self.values.clear()
         new=set(values)-self.verified
-        if self.auto:
-            self.holds.update((new & self.enabled) - self.overrides)
+        self.holds.update((new & self.enabled) - self.overrides)
         self.verified=set(values)
         self.values=dict(values)
 
@@ -91,25 +104,21 @@ class StatsPolicy:
             self.pending.discard(key)
         self.overrides.add(key)
 
+    def preferences(self):
+        return {'enabled': sorted(self.enabled), 'targets': dict(self.targets)}
+
     def set_enabled(self, key, enabled):
         if enabled:
             self.enabled.add(key)
-            if self.auto and key in self.verified and key not in self.overrides:
-                self.holds.add(key)
+            self.overrides.discard(key)
+            self.holds.add(key)
         else:
             self.enabled.discard(key)
+            self.holds.discard(key)
             self.pending.discard(key)
 
-    def maximize(self):
-        for key in self.enabled:
-            self.targets[key] = BY_KEY[key].maximum
-        self.holds.update(self.enabled)
-        self.overrides.update(self.enabled)
-        self.pending.update(self.verified & self.enabled)
-        self.paused = False
-
     def request(self):
-        automatic = self.enabled - self.overrides if self.auto and self.searching and not self.paused else set()
+        automatic = self.enabled - self.overrides if self.searching and not self.paused else set()
         return dict(auto_keys=automatic,
                     targets={k:BY_KEY[k].native(v) for k,v in self.targets.items() if k!='health'},
                     keys=set() if self.paused else (self.holds | self.pending) & self.enabled,

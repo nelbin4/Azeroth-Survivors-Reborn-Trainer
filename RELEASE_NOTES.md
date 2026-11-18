@@ -1,5 +1,4 @@
-Azeroth Survivor Reborn Trainer v0.9.12
+Azeroth Survivor Reborn Trainer v0.9.13
 
-- Move larger checkbox blocks to the left of every stat row and remove the category filters.
-- Move Find, Stop search, progress and status above the right-side editor.
-- Use a narrower fixed-size window with larger text.
+- Enabled stat checkboxes apply and freeze their targets automatically. Enable Damage bonus, Cooldown reduction, Area of effect, and Luck bonus by default. Save selections and targets locally.
+- Put Stop Freeze beneath Find and consolidate game, update, and Advanced buttons into one footer row.

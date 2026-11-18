@@ -8,7 +8,7 @@ from stats_model import BY_KEY, VIEWS
 
 
 class StatsPanel:
-    def __init__(self, root, parent, session_provider, native_provider, closing):
+    def __init__(self, root, parent, session_provider, native_provider, closing, preferences=None, save_preferences=lambda values: None):
         self.root, self.closing = root, closing
         self.selected = None
         self.advanced = None
@@ -16,7 +16,8 @@ class StatsPanel:
         self.search_session = None
         self.search_started = None
         self.progress_running = False
-        self.controller = StatsController(root, session_provider, native_provider, closing, self.refresh)
+        self.save_preferences = save_preferences
+        self.controller = StatsController(root, session_provider, native_provider, closing, self.refresh, preferences)
 
         workspace = ttk.Frame(parent, padding=(10, 10, 10, 12))
         workspace.pack(fill='both', expand=True)
@@ -31,6 +32,8 @@ class StatsPanel:
         self.find_button = ttk.Button(editor, text='Find', style='Find.TButton',
                                       command=self.toggle_search)
         self.find_button.pack(fill='x')
+        self.pause = ttk.Button(editor, command=self.controller.pause)
+        self.pause.pack(fill='x', pady=(6, 0))
         self.search_progress = ttk.Progressbar(editor, mode='indeterminate',
                                                orient='horizontal', maximum=100)
         self.search_progress.pack(fill='x', pady=(6, 8))
@@ -41,18 +44,6 @@ class StatsPanel:
         ttk.Label(editor, textvariable=self.search_hint, foreground='#a9b8c8',
                   wraplength=229).pack(anchor='w')
         ttk.Separator(editor).pack(fill='x', pady=12)
-
-        toolbar = ttk.Frame(listing, padding=(0, 0, 0, 9))
-        toolbar.pack(fill='x')
-        self.auto = tk.BooleanVar(value=True)
-        ttk.Checkbutton(toolbar, text='Auto max & freeze', variable=self.auto,
-                        command=self.change_auto).pack(side='left')
-        self.role_text = tk.StringVar()
-        ttk.Label(toolbar, textvariable=self.role_text, wraplength=130).pack(side='left', padx=10)
-        self.pause = ttk.Button(toolbar, command=self.controller.pause)
-        self.pause.pack(side='right')
-        self.max_all = ttk.Button(toolbar, text='Max & freeze all', command=self.maximize)
-        self.max_all.pack(side='right', padx=7)
 
         columns = ('stat', 'current', 'target', 'state')
         self.table = ttk.Treeview(listing, columns=columns, show='tree headings', selectmode='browse')
@@ -110,7 +101,6 @@ class StatsPanel:
         self.error = tk.StringVar()
         ttk.Label(editor, textvariable=self.help, wraplength=228, foreground='#a9b8c8').pack(anchor='w', pady=(10, 0))
         ttk.Label(editor, textvariable=self.error, wraplength=228, foreground='#efaaaa').pack(anchor='w')
-        ttk.Button(editor, text='Advanced…', command=self.open_advanced).pack(side='bottom', anchor='w')
         self.xp = tk.BooleanVar(value=False)
         self.select('damage')
 
@@ -169,19 +159,24 @@ class StatsPanel:
                 return self.toggle_selected_enabled(event)
 
     def toggle_selected_enabled(self, _event):
-        policy = self.controller.policy
-        policy.set_enabled(self.selected, self.selected not in policy.enabled)
+        controller = self.controller
+        policy = controller.policy
+        enabled = self.selected not in policy.enabled
+        policy.set_enabled(self.selected, enabled)
         self.error.set('')
-        self.controller.changed()
+        self.persist_preferences()
+        if enabled and not policy.paused and not policy.searching and self.selected not in policy.verified:
+            if controller.connected_session():
+                controller.find()
+                return 'break'
+        controller.changed()
         return 'break'
 
-    def change_auto(self):
-        self.controller.policy.auto = self.auto.get()
-        self.controller.changed()
-
-    def maximize(self):
-        self.controller.maximize()
-        self.load_target()
+    def persist_preferences(self):
+        try:
+            self.save_preferences(self.controller.policy.preferences())
+        except OSError as exc:
+            self.error.set(f'Could not save stat preferences: {exc}')
 
     def apply(self, freeze):
         policy = self.controller.policy
@@ -192,6 +187,7 @@ class StatsPanel:
             return
         self.freeze_edited = False
         self.error.set('')
+        self.persist_preferences()
         self.controller.changed()
 
     def use_maximum(self):
@@ -257,12 +253,6 @@ class StatsPanel:
         controller = self.controller
         policy, last = controller.policy, controller.last
         session = controller.session_provider()
-        self.role_text.set({
-            'host': 'Host',
-            'guest': 'Guest · read-only',
-            'none': 'Solo',
-            'unknown': 'Checking session…',
-        }[controller.role] if session else 'Game disconnected')
         connected_session = controller.connected_session()
         connected = connected_session is not None
         self.refresh_search_progress(connected_session)
@@ -270,9 +260,8 @@ class StatsPanel:
         self.summary.set(message)
         self.find_button.configure(text='Stop search' if policy.searching and connected else 'Find',
                                    state='normal' if connected else 'disabled')
-        self.max_all.configure(state='normal' if connected else 'disabled')
-        self.pause.configure(text='Resume freezes' if policy.paused else 'Pause freezes',
-                             state='normal' if policy.paused or policy.holds else 'disabled')
+        self.pause.configure(text='Resume Freeze' if policy.paused else 'Stop Freeze',
+                             state='normal' if connected and (policy.paused or policy.searching or policy.holds) else 'disabled')
 
         freeze = last.get('freeze', {})
         read_only = controller.role in ('unknown', 'guest') or last.get('host_required')
@@ -290,7 +279,7 @@ class StatsPanel:
             elif read_only and known:
                 state = 'Checking role' if controller.role == 'unknown' else 'Read-only'
             elif policy.paused and (frozen or key in policy.pending):
-                state = 'Paused'
+                state = 'Stopped'
             elif key in freeze.get('errors', {}):
                 state = 'Retrying' if known else 'Waiting'
             elif key in policy.pending:

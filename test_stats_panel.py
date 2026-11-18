@@ -32,6 +32,7 @@ class StatsPanelTests(unittest.TestCase):
         self.assertFalse(self.panel.controller.policy.searching)
 
     def test_selected_stat_editor_queues_validated_custom_values(self):
+        self.panel.controller.policy.set_enabled('crit', True)
         self.panel.controller.policy.accept('hero',{'crit':92})
         self.panel.select('crit');self.panel.target.set('50');self.panel.apply(True)
         self.assertEqual(self.panel.controller.policy.request()['targets']['crit'],42)
@@ -41,20 +42,30 @@ class StatsPanelTests(unittest.TestCase):
         self.assertTrue(self.panel.error.get())
         self.assertEqual(self.panel.controller.policy.targets['crit'],50)
 
-    def test_max_all_updates_editor_and_preserves_verification(self):
-        self.panel.controller.policy.accept('hero',{'damage':7})
-        self.panel.target.set('50');self.panel.apply(True)
-        self.panel.max_all.invoke()
-        self.assertEqual(self.panel.target.get(),'9999')
-        self.assertEqual(self.panel.controller.policy.verified,{'damage'})
+    def test_checkbox_saves_and_applies_a_verified_stat_without_pressing_apply(self):
+        saved = []
+        self.panel.save_preferences = saved.append
+        policy = self.panel.controller.policy
+        policy.accept('hero', {'crit': 2})
+        self.panel.select('crit')
+        self.panel.toggle_selected_enabled(None)
+        self.assertIn('crit', policy.request()['keys'])
+        self.assertIn('crit', saved[-1]['enabled'])
+        self.assertEqual(policy.request()['targets']['crit'], 92)
+        self.panel.toggle_selected_enabled(None)
+        self.assertNotIn('crit', policy.request()['keys'])
+        self.assertNotIn('crit', saved[-1]['enabled'])
 
-    def test_host_indicator_tracks_verified_role(self):
-        self.panel.controller.role = 'host'
+    def test_stop_freeze_pauses_writes_and_resume_restores_them(self):
+        policy = self.panel.controller.policy
+        policy.accept('hero', {'damage': 7})
         self.panel.refresh()
-        self.assertIn('Host', self.panel.role_text.get())
-        self.panel.controller.role = 'guest'
-        self.panel.refresh()
-        self.assertIn('read-only', self.panel.role_text.get())
+        self.assertEqual(self.panel.pause.cget('text'), 'Stop Freeze')
+        self.panel.pause.invoke()
+        self.assertEqual(policy.request()['keys'], set())
+        self.assertEqual(self.panel.pause.cget('text'), 'Resume Freeze')
+        self.panel.pause.invoke()
+        self.assertIn('damage', policy.request()['keys'])
 
     def test_apply_once_clears_an_existing_hold(self):
         policy = self.panel.controller.policy
@@ -100,3 +111,4 @@ class StatsPanelTests(unittest.TestCase):
         self.panel.toggle_selected_enabled(None)
         self.assertEqual(self.panel.table.item('damage', 'image'), (str(self.panel.checkbox_images[True]),))
         self.assertTrue(self.panel.apply_button.instate(['!disabled']))
+        self.assertTrue(self.panel.controller.policy.searching)

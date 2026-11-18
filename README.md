@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.9.12
+# Azeroth Survivor Reborn Trainer 0.9.13
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -12,18 +12,19 @@ Derived from the process validation and recovery approach of
 
 Download the portable zip from [Reborn Trainer Releases](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases),
 extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. If the game is
-closed, click **Run Azeroth Survivors Reborn**. Start a solo run in the game,
+closed, click **Run Game**. Start a solo run in the game,
 then click **Find** in the trainer. This starts automatic background Hunt.
-**Auto max & freeze newly found stats** is enabled by default. Verified fields
-are maximized on their first usable read while discovery continues. No stat search or stat
-write starts automatically before Find. Keep the trainer open.
+The default enabled stats are Damage bonus, Cooldown reduction, Area of effect,
+and Luck bonus. Enabled stats apply and freeze at their targets as soon as
+Hunt verifies them. Selections and targets are stored locally in
+`reborn-settings.json`. Keep the trainer open for active freezes.
 
 ## Launch and process controls
 
-**Run Azeroth Survivors Reborn** launches the saved game executable from its own
+**Run Game** launches the saved game executable from its own
 folder and pins the returned PID, process creation time and executable path.
 On first use, select the installed `AzerothSurvivorsGame.exe`. The path is saved;
-**Game executable…** changes it later without launching the game.
+**Locate exe file** changes it later without launching the game.
 
 Run is disabled whenever a Reborn process is detected, including unsupported
 builds. The process row shows the selected PID. Existing single instances are
@@ -42,17 +43,16 @@ leaves the game running.
 
 **Stats** shows current values, targets, freeze settings and status in one
 table. Select a row to edit it in the side panel. All stats are shown in one table.
-Click a row’s **Enabled** checkbox or press Space on that row. Unchecked stats remain visible and are excluded from Auto max, Max & freeze all, and individual writes. **Keep frozen** in the editor controls whether an enabled stat holds its target.
+Click a row’s **Enabled** checkbox or press Space on that row. Unchecked stats remain visible and receive no writes. Enabling a stat applies and freezes its target once verified. **Keep frozen** in the editor controls whether an enabled stat holds its target.
 
 **Find** becomes available after the trainer connects to the selected game process. It starts background discovery. The progress bar and elapsed timer show when Hunt is working. A first search typically takes 1–3 minutes. **Stop search** stops finding new
-allocations while verified existing holds can continue. **Pause freezes** stops
-stat and XP writes while discovery continues. Resume keeps configured targets
+allocations while verified existing holds can continue. **Stop Freeze** stops
+stat and XP writes while discovery continues. **Resume Freeze** keeps configured targets
 and freeze preferences. Pending, ambiguous or stale fields are never written.
 
 Set a target and click **Apply**. Check **Keep frozen** to keep applying it,
 or clear it to apply once. **Use maximum** fills the target field.
-**Max & freeze all** sets every target to its trainer limit and starts Find if
-no fields are verified. Crit targets are displayed as total chance/damage; the backend
+Crit targets are displayed as total chance/damage; the backend
 converts them to bonuses above the game's native base. Echo uses percentage
 units in the editor and its native float representation in memory. Current
 health follows the live verified maximum. Maximum-health targets are minimums;
@@ -193,7 +193,7 @@ Hold polling skips unchanged values and uses no injected code.
 
 ## Player controls
 
-**Max & freeze all** holds supported stats and resources at the trainer's limits.
+Enabled stats default to the trainer limits below.
 Current-health holds heal to full. These are bounded
 trainer limits; they are not a claim that every value has a native maximum.
 
@@ -222,8 +222,8 @@ player/name contract and are unavailable when that contract is missing.
 
 After Find, Hunt follows new runs and validates their fresh solo ownership before
 resuming eligible holds. Stop search does not locate a new allocation until Find
-is used again. Pause freezes leaves configured targets intact and resumes only
-through Resume freezes or Max & freeze all. Keep the trainer open for active holds.
+is used again or an unverified stat is enabled while connected. Stop Freeze leaves
+configured targets intact. Use Resume Freeze to reapply enabled holds.
 
 ## Validation
 
