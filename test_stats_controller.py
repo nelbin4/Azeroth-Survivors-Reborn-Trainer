@@ -162,7 +162,7 @@ class StatsControllerTests(unittest.TestCase):
                 worker.freezer.apply.return_value=dict(held={},confirmed={},errors={},values={'damage':7})
                 policy=StatsPolicy();policy.set_enabled('damage',True)
                 request=policy.request();request.update(host=True,role_lease=RoleLease(session,0x10000,0x20000))
-                with patch.object(RoleLease,'reader',return_value=SimpleNamespace(read=lambda memory:role)):
+                with patch.object(RoleLease,'reader',return_value=SimpleNamespace(read=Mock(return_value=role))):
                     result=worker.run(session,None,request,lambda:False)
                 factory.assert_called_once_with(123,writable=False)
                 self.assertTrue(worker.freezer.apply.call_args.kwargs['read_only'])
@@ -179,7 +179,7 @@ class StatsControllerTests(unittest.TestCase):
         controller.find()
         self.assertTrue(controller.policy.searching)
 
-    def test_blocked_session_clears_queued_one_time_targets(self):
+    def test_guest_clears_queued_one_time_targets_but_pending_role_checks_do_not(self):
         controller = self.controller()
         controller.worker = SimpleNamespace(mode=None)
         controller.session = controller.session_provider()
@@ -190,4 +190,8 @@ class StatsControllerTests(unittest.TestCase):
         with patch('stats_controller.threading.Thread'):
             controller.results.put((controller.epoch, blocked))
             controller.poll()
+            self.assertEqual(controller.policy.pending, {'crit'})
+            controller.results.put((controller.epoch, dict(blocked, role='guest', heroes=[])))
+            controller.poll()
+            self.assertIn('Guest session', controller.message)
         self.assertEqual(controller.policy.pending, set())

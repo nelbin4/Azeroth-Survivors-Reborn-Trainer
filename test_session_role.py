@@ -63,6 +63,20 @@ class RoleTests(unittest.TestCase):
         self.node(0x16028,self.guest,4,self.key_role)
         self.assertEqual(self.reader.read(self.memory),'guest')
 
+    def test_mid_read_role_change_never_returns_the_previous_role(self):
+        self.assertEqual(self.discover(), 'host')
+        read = self.memory.read
+
+        def changing(address, size):
+            if address == self.host:
+                self.node(0x16028, self.guest, 4, self.key_role)
+            return read(address, size)
+
+        self.memory.read = changing
+        with self.assertRaisesRegex(ValueError, 'Lobby changed'):
+            self.reader.read(self.memory)
+        self.assertEqual(self.reader.read(self.memory), 'guest')
+
     def test_stale_runtime_and_invalid_role_never_authorize_host(self):
         self.discover();self.pack(self.global_state+176,'Q',self.state+8)
         with self.assertRaises(ValueError):self.reader.read(self.memory)

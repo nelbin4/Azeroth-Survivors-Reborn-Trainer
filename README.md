@@ -13,6 +13,8 @@ verified co-op host sessions.
 Damage bonus, Cooldown reduction, Area of effect, and Luck bonus are checked by default.
 Selections and manual targets are stored in
 `%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-settings.json`.
+On upgrade, the trainer imports older settings from beside the executable
+if the new settings file does not exist.
 Keep the trainer open for active freezes.
 
 ## Launch and process controls
@@ -227,7 +229,8 @@ trainer limits; they are not a claim that every value has a native maximum.
 | Run gold | 99,999,999 |
 | Free rerolls | 9,999 |
 
-Holds reapply after native recalculations. Uncheck Current health and press Apply to heal to full once.
+Holds reapply after native recalculations. Check **Current health** to keep it
+at verified maximum health.
 
 After Find, Hunt follows new runs and verifies the selected character and session before
 resuming eligible holds. Stop search does not locate a new allocation until Find

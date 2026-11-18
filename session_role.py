@@ -96,6 +96,7 @@ class SessionRole:
         self.cursor = 0
         self.candidates = {}
         self.regions = None
+        self.last_error = None
         self.state=None;self.env=None;self.slot=None;self.header=None;self.role='unknown';self.retry=0
 
     def read(self,memory):
@@ -116,12 +117,14 @@ class SessionRole:
             raise ValueError('Lobby role slot changed.')
         lobby,tag=struct.unpack_from('<QI',before)
         if tag!=5:raise ValueError('Lobby role table is unavailable.')
-        _,value=lookup(memory,lobby,b'role')
+        lobby_header,_,_=table(memory,lobby)
+        role_slot,value=lookup(memory,lobby,b'role')
         name,tag=struct.unpack_from('<QI',value)
         if tag!=4:raise ValueError('Lobby role is not a string.')
         role=string(memory,name).decode('ascii')
         if role not in ('host','guest','none'):raise ValueError('Unrecognized lobby role.')
-        if memory.read(self.slot,40)!=before or table(memory,self.env)[0]!=header:
+        if (memory.read(role_slot,16)!=value or table(memory,lobby)[0]!=lobby_header
+                or memory.read(self.slot,40)!=before or table(memory,self.env)[0]!=header):
             raise ValueError('Lobby changed while reading its role.')
         self.role=role
         return role
@@ -132,18 +135,22 @@ class SessionRole:
         session.process()
         if self.state is not None:
             try:
-                return self.read(memory)
-            except (ValueError, OSError, UnicodeError):
+                role = self.read(memory)
+                self.last_error = None
+                return role
+            except (ValueError, OSError, UnicodeError) as exc:
                 # Lua can replace the lobby table while the role is being
                 # read. Keep the rooted runtime through that short race.
                 try:
                     if rooted_globals(memory, self.state) == self.env:
                         self.slot = None
+                        self.last_error = str(exc)
                         return 'unknown'
                 except (ValueError, OSError):
                     pass
                 self.reset()
                 self.session = session
+                self.last_error = str(exc)
         if time.monotonic() < self.retry:
             return 'unknown'
         if regions is None:
@@ -188,12 +195,18 @@ class SessionRole:
             self.candidates.clear()
             self.regions = None
             try:
-                return self.read(memory)
-            except (ValueError, OSError, UnicodeError):
+                role = self.read(memory)
+                self.last_error = None
+                return role
+            except (ValueError, OSError, UnicodeError) as exc:
+                self.last_error = str(exc)
                 return 'unknown'
 
+        ambiguous = len(self.candidates) > 1
         self.reset()
         self.session = session
+        if ambiguous:
+            self.last_error = 'Multiple rooted lobby runtimes were found.'
         self.retry = time.monotonic() + 10
         return 'unknown'
 
@@ -248,7 +261,7 @@ class RoleMonitor:
                     with self.lock:
                         if cancel.is_set():return
                         self.role,self.lease=role,lease
-                        self.last_error=None
+                        self.last_error=probe.last_error
                     if lease and self.cache and lease != self._cached:
                         data=dict(session=identity,state=lease.state,env=lease.env)
                         try:

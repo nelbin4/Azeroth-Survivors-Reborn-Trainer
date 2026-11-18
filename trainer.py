@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import suppress
 import ctypes
 from ctypes import wintypes
 import hashlib
@@ -22,7 +23,7 @@ import psutil
 from compatibility import resolve, Layout
 
 APP_NAME = 'Azeroth Survivor Reborn Trainer'
-VERSION = '0.9.18'
+VERSION = '0.9.19'
 ROOT = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
 # Settings, logs and caches must survive an executable directory that is not
 # writable (Program Files, a read-only share, or a USB stick).
@@ -88,6 +89,26 @@ def atomic_json(path, data):
     temp = path.with_suffix('.tmp')
     temp.write_text(json.dumps(data, indent=2), encoding='utf-8')
     os.replace(temp, path)
+
+
+def load_settings(path, legacy_path):
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        if path == legacy_path:
+            return {}
+        try:
+            data = json.loads(legacy_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
+        if isinstance(data, dict):
+            try:
+                atomic_json(path, data)
+            except OSError:
+                logging.warning('Could not migrate trainer settings', exc_info=True)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 class Trainer:
@@ -205,10 +226,8 @@ def run_gui():
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
 
-    try:
+    with suppress(AttributeError, OSError):
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except (AttributeError, OSError):
-        pass
     root = tk.Tk()
     root.title(APP_NAME)
 
@@ -272,13 +291,7 @@ def run_gui():
     retry = RetrySchedule()
     connecting = False
     closing = False
-    try:
-        saved = json.loads(SETTINGS.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        saved = {}
-
-    if not isinstance(saved, dict):
-        saved = {}
+    saved = load_settings(SETTINGS, ROOT / SETTINGS.name)
 
     def error(exc):
         logging.exception('Trainer operation failed')

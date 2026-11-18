@@ -32,7 +32,7 @@ EMPTY = Value()
 
 
 def merge(a,b):
-    lanes = tuple(x|y for x,y in zip(a.lanes,b.lanes)) if a.lanes and b.lanes else None
+    lanes = tuple(x|y for x,y in zip(a.lanes,b.lanes,strict=True)) if a.lanes and b.lanes else None
     return Value(a.origins|b.origins,a.pointer if a.pointer==b.pointer else None,lanes,a.scaled|b.scaled)
 
 
@@ -98,7 +98,7 @@ def trace(raw, start, entry, seeds, hero_register, stats, target, summaries=None
         ins=instructions[pc];registers,memory=states[pc]
         registers,memory=dict(registers),dict(memory)
         ops=ins.operands;mn=ins.mnemonic
-        def read(op):
+        def read(op, ins=ins, pc=pc, registers=registers, memory=memory):
             if op.type==X86_OP_REG:return registers.get(register_family(ins,op.reg),EMPTY)
             if op.type==X86_OP_MEM:
                 source=(map_sources or {}).get(pc)

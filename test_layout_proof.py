@@ -31,7 +31,7 @@ def named_fixture(stride=0x1950, stats=0x1838, name=0x11D8, rerolls=0x18FC,
         + b'\x48\x69\xc9' + u(stride) + b'\x4c\x8d\x2c\x08'
         + b'\x49\x8d\x85' + u(rerolls + 12) + b'\x49\x81\xc5' + u(rerolls))
     put(0x398, u(rerolls + 12))
-    defaults = dict(zip(STAT_LABELS.values(), (8, 12, 16, 20, 24, 28, 32, 44, 48, 52, 56, 60)))
+    defaults = dict(zip(STAT_LABELS.values(), (8, 12, 16, 20, 24, 28, 32, 44, 48, 52, 56, 60), strict=True))
     defaults.update(offsets or {})
     put(0x580, b'\x8b\x88' + u(stats + defaults['damage']) + b'\xf3\x4c\x0f\x2a\xc1')
     put(0x20, b'\x8b\x09\x41\xb8\x0a\x00\x00\x00\xc3')

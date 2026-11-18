@@ -18,7 +18,7 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: Select release version
@@ -47,7 +47,7 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "latest=$($newer.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.1.0
         if: steps.release.outputs.tag != ''
         with:
           python-version: '3.14'

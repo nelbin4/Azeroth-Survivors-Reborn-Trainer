@@ -1,7 +1,22 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock
 
 import trainer
+
+
+class SettingsTests(unittest.TestCase):
+    def test_legacy_settings_are_migrated_and_new_settings_take_precedence(self):
+        with TemporaryDirectory() as folder:
+            legacy = Path(folder) / 'reborn-settings.json'
+            current = Path(folder) / 'state' / legacy.name
+            current.parent.mkdir()
+            trainer.atomic_json(legacy, {'stats': {'enabled': ['crit']}})
+            migrated = trainer.load_settings(current, legacy)
+            self.assertEqual(migrated, {'stats': {'enabled': ['crit']}})
+            trainer.atomic_json(legacy, {})
+            self.assertEqual(trainer.load_settings(current, legacy), migrated)
 
 
 class FakeMemory:

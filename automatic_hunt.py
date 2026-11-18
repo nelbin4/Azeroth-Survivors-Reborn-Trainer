@@ -5,6 +5,7 @@ Array/numeric candidates cannot authorize writes. Separate named field proofs
 may authorize the guarded incremental writer in hunt_freeze.
 """
 from dataclasses import dataclass
+from contextlib import suppress
 from pathlib import Path
 import hashlib
 import re
@@ -231,11 +232,10 @@ class AutomaticHunt:
                     return
                 hero_pointer = pointer+selected*plan.stride
                 name = None
-                # Every participant must have a valid identity; generic vectors
-                # and stale resource buffers are not player ownership evidence.
+                # Only the selected character is eligible. Remote slots may
+                # still be populating or may no longer have a live name.
                 if plan.name is not None:
-                    names=[read_identity(memory,pointer+i*plan.stride,plan.name) for i in range(count)]
-                    name = names[selected]
+                    name = read_identity(memory, hero_pointer, plan.name)
                 raw = memory.read(hero_pointer, plan.stride)
                 # These header/value bounds narrow the search; they are not a
                 # semantic layout proof and cannot enable writes.
@@ -257,10 +257,8 @@ class AutomaticHunt:
 
         # Revalidate previously located roots first, instead of rescanning all stacks.
         for game in self.leases[:8]:
-            try:
+            with suppress(OSError):
                 probe(game, memory.read(game + plan.vector, 24))
-            except OSError:
-                pass
         partial = False
         if discover and (not found or self.cursor is not None or started >= self.next_discovery):
             regions = list(stack_source(process, memory))
@@ -288,12 +286,12 @@ class AutomaticHunt:
                     except OSError:
                         raw = b''
                     examined += amount
-                    for match in re.finditer(rb'(?=([\x01-\x40]\x00{7}.{8}[\x01-\x04]\x00{7}))', raw, re.DOTALL):
+                    for match in re.finditer(rb'[\x01-\x40]\x00{7}(?=.{8}[\x01-\x04]\x00{7})', raw, re.DOTALL):
                         address = position + match.start()
                         game = address - plan.vector
                         if address % 8 or game < bottom or game + plan.index + 8 > top:
                             continue
-                        probe(game, match.group(1))
+                        probe(game, raw[match.start():match.start() + 24])
                         if probes >= 128 or len(found) >= 8:
                             # Resume after this candidate, not after the entire
                             # chunk: dense stacks can contain hundreds of Rust

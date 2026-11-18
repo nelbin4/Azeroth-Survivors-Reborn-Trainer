@@ -71,9 +71,9 @@ class PlayerTests(unittest.TestCase):
         candidate = dict(self.p.lease, count=1, index=0)
         with patch('player.discover', return_value=[candidate, dict(candidate)]):
             self.assertEqual(self.p.connect()['guid'], 123)
-        with patch('player.discover', return_value=[candidate, dict(candidate, hero='0x40000')]):
-            with self.assertRaisesRegex(RuntimeError, '2 distinct'):
-                self.p.connect()
+        with patch('player.discover', return_value=[candidate, dict(candidate, hero='0x40000')]), \
+                self.assertRaisesRegex(RuntimeError, '2 distinct'):
+            self.p.connect()
 
     def test_unchanged_hold_tick_does_not_write(self):
         self.p.maximize()

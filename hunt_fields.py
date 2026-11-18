@@ -80,7 +80,7 @@ def resource_candidates(blob, sections, code, text_rva, array=None, stats=None):
                 continue
             registers = {hero_register:('field', 0), 'rbp':('stack', 'rbp', 0), 'rsp':('stack', 'rsp', 0)}
             stack = {}
-            def address(ins, op):
+            def address(ins, op, registers=registers):
                 mem = op.mem
                 if mem.index:
                     return None

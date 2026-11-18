@@ -39,9 +39,9 @@ class GameProcessTests(unittest.TestCase):
 
     def test_running_process_blocks_duplicate_launch_before_spawning(self):
         with patch('game_process.psutil.process_iter', return_value=[self.first]), \
-                patch('game_process.subprocess.Popen') as popen:
-            with self.assertRaisesRegex(RuntimeError, 'already running'):
-                GameLauncher().launch(self.exe)
+                patch('game_process.subprocess.Popen') as popen, \
+                self.assertRaisesRegex(RuntimeError, 'already running'):
+            GameLauncher().launch(self.exe)
         popen.assert_not_called()
 
     def test_ambiguous_instances_do_not_select_arbitrary_pid(self):
@@ -64,9 +64,9 @@ class GameProcessTests(unittest.TestCase):
         for method, value in (('create_time', 101), ('exe', 'different.exe'), ('is_running', False)):
             current = process(123, self.exe)
             getattr(current, method).return_value = value
-            with patch('game_process.psutil.Process', return_value=current):
-                with self.assertRaisesRegex(RuntimeError, 'changed'):
-                    session.stop()
+            with patch('game_process.psutil.Process', return_value=current), \
+                    self.assertRaisesRegex(RuntimeError, 'changed'):
+                session.stop()
             current.terminate.assert_not_called()
 
     def test_stop_targets_only_the_validated_process(self):
@@ -113,17 +113,17 @@ class GameProcessTests(unittest.TestCase):
         launcher = GameLauncher()
         with patch('game_process.psutil.process_iter', return_value=[]), \
                 patch('game_process.subprocess.Popen', return_value=Mock(pid=123, poll=Mock(return_value=1))), \
-                patch('game_process.psutil.Process', return_value=self.first):
-            with self.assertRaisesRegex(RuntimeError, 'exited during startup'):
-                launcher.launch(self.exe)
+                patch('game_process.psutil.Process', return_value=self.first), \
+                self.assertRaisesRegex(RuntimeError, 'exited during startup'):
+            launcher.launch(self.exe)
         self.assertIsNone(launcher.session)
 
     def test_trainer_rejects_stale_selected_pid_before_layout_or_memory_access(self):
         session = GameSession.capture(self.first)
         self.first.create_time.return_value = 999
         with patch('game_process.psutil.Process', return_value=self.first), \
-                patch('trainer.resolve') as resolve, patch('trainer.Memory') as memory:
-            with self.assertRaisesRegex(RuntimeError, 'changed'):
-                trainer.Trainer(self.exe, session=session)
+                patch('trainer.resolve') as resolve, patch('trainer.Memory') as memory, \
+                self.assertRaisesRegex(RuntimeError, 'changed'):
+            trainer.Trainer(self.exe, session=session)
         resolve.assert_not_called()
         memory.assert_not_called()

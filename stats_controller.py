@@ -54,6 +54,8 @@ class StatsWorker:
         mode=(session,layout.digest if layout else None)
         if mode!=self.mode:
             self.hunt.reset();self.freezer.reset();self.mode=mode
+        if request.get('retry_discovery'):
+            self.hunt.plan_error = None
         source=(lambda path:plan_from_layout(path,layout)) if layout else make_plan
         reader=writer=lock=None
         try:
@@ -123,6 +125,7 @@ class StatsController:
         self.cancel=threading.Event()
         self.busy=False
         self.next_scan=0
+        self.retry_discovery=False
         self.session=None
         self.last={}
         self.message='Ready. Click Find to start automatic Hunt.'
@@ -148,11 +151,7 @@ class StatsController:
         if not self.connected_session():
             self.message='Wait for Reborn to connect before using Find.'
             self.on_change();return
-        hunt = getattr(self.worker, 'hunt', None)
-        if hunt is not None:
-            # An explicit Find must be able to retry a previously unavailable
-            # discovery error instead of waiting for the image identity to change.
-            hunt.plan_error = None
+        self.retry_discovery=True
         self.policy.searching=True
         self.message='Finding verified stats in the background…'
         self.changed()
@@ -221,16 +220,18 @@ class StatsController:
                     freeze=result.get('freeze',{})
                     successful=set(freeze.get('held',{}))
                     self.policy.pending.difference_update(successful)
-                    if result.get('host_required'):
-                        # Writes are impossible in this state; keeping queued
-                        # targets would retry them forever with no progress.
+                    if result.get('role') == 'guest':
                         self.policy.pending.clear()
+                    self.policy.pending.difference_update(result.get('unmapped', ()))
                     held = 0 if self.policy.paused else len(set(freeze.get('confirmed', {})) & self.policy.holds)
                     selected=result.get('heroes',[{}])[0] if result.get('heroes') else {}
                     who = f" · {selected.get('name') or 'player'}" if selected else ''
                     if selected.get('level') is not None:
                         who += f" (level {selected['level']})"
-                    if result.get('host_required'):self.message='Guest session: stat writes disabled.' if result.get('role')=='guest' else 'Stats found. Checking session role…'
+                    if result.get('role') == 'guest':
+                        self.message = ('Guest session · stats are read-only.' if selected
+                                        else 'Guest session · looking for the selected character.')
+                    elif result.get('host_required'):self.message='Stats found. Checking session role…'
                     elif self.policy.paused:self.message=f'Freezes stopped · {len(self.policy.verified)} verified stats.'
                     elif held:self.message=f'{held} stats frozen{who} · '+('Hunt continues in the background.' if self.policy.searching else 'Monitoring existing fields.')
                     elif successful:self.message=f'{len(successful)} stats applied{who} · checking persistence…'
@@ -244,7 +245,9 @@ class StatsController:
                         self.message += f" {missing} {'stat' if missing == 1 else 'stats'} unavailable in this build."
                     if old!=self.policy.holds:expedite=True
                 delay=self.schedule.delay(result)
-                if not isinstance(result,Exception) and self.policy.pending&self.policy.verified:delay=min(delay,.25)
+                if (not isinstance(result, Exception) and not result.get('host_required')
+                        and self.policy.pending & self.policy.verified):
+                    delay = min(delay, .25)
                 self.next_scan=0 if expedite else time.monotonic()+delay
                 self.on_change()
         except queue.Empty:pass
@@ -254,6 +257,8 @@ class StatsController:
         if session and monitor and not self.busy and time.monotonic()>=self.next_scan:
             request=self.policy.request()
             request['role_lease']=self.role_lease
+            request['retry_discovery']=self.retry_discovery
+            self.retry_discovery=False
             native=self.native_provider()
             epoch=self.epoch
             cancel=threading.Event();self.cancel=cancel

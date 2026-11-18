@@ -289,6 +289,13 @@ class AutomaticHuntTests(unittest.TestCase):
         self.memory.regions[0x300100][:]=b'Changed'
         self.assertEqual(self.step()['heroes'][0]['name'],'Changed')
 
+    def test_unavailable_remote_name_does_not_hide_the_selected_character(self):
+        self.add_identity(count=2, index=1)
+        del self.memory.regions[0x300000]
+        self.assertEqual(self.step()['heroes'][0]['name'], 'Another')
+        del self.memory.regions[0x300100]
+        self.assertEqual(self.step()['heroes'], [])
+
     def test_moved_level_field_does_not_reject_real_character(self):
         from dataclasses import replace
 

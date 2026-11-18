@@ -120,9 +120,7 @@ def config_anchors(code, text_rva):
                 memory = operands[0].mem
                 if memory.base != base or memory.index:
                     continue
-                if following.mnemonic == 'setne' and memory.disp in (0x208, 0x209, 0x20A):
-                    fields.add(memory.disp)
-                elif following.mnemonic == 'movss' and memory.disp == 0x1F8:
+                if following.mnemonic == 'setne' and memory.disp in (0x208, 0x209, 0x20A) or following.mnemonic == 'movss' and memory.disp == 0x1F8:
                     fields.add(memory.disp)
                 if fields == {0x208, 0x209, 0x20A, 0x1F8}:
                     end = following.address + following.size - rva
@@ -195,7 +193,7 @@ def _header(instructions):
     ir, _, index_offset = index
     cr, game, count_offset = count
     pr, other_game, pointer_offset = pointer
-    if game != other_game or ir == cr or ir == pr or game in (ir, cr):
+    if ir in (cr, pr) or game != other_game or game in (ir, cr):
         return None
     if count_offset != pointer_offset + 8 or not 0x100 <= pointer_offset < index_offset < 0x10000:
         return None

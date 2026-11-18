@@ -56,21 +56,21 @@ class UpdaterTests(unittest.TestCase):
     def test_corrupt_truncated_oversized_and_non_executable_downloads_fail(self):
         for raw in (b'bad', executable() + b'extra', b'x' * 1024):
             item = updater.parse_release(release(), '0.6.0')
-            with tempfile.TemporaryDirectory() as temp, patch('updater.request', return_value=Response(raw)):
-                with self.assertRaises(ValueError):
-                    updater.download(item, temp)
+            with tempfile.TemporaryDirectory() as temp, patch('updater.request', return_value=Response(raw)), \
+                    self.assertRaises(ValueError):
+                updater.download(item, temp)
         raw = b'x' * 1024
         item = updater.parse_release(release(raw), '0.6.0')
-        with tempfile.TemporaryDirectory() as temp, patch('updater.request', return_value=Response(raw)):
-            with self.assertRaisesRegex(ValueError, 'Windows x64'):
-                updater.download(item, temp)
+        with tempfile.TemporaryDirectory() as temp, patch('updater.request', return_value=Response(raw)), \
+                self.assertRaisesRegex(ValueError, 'Windows x64'):
+            updater.download(item, temp)
 
     def test_unexpected_redirect_fails(self):
         response = Response(executable())
         response.geturl = lambda: 'https://attacker.example/file'
-        with tempfile.TemporaryDirectory() as temp, patch('updater.request', return_value=response):
-            with self.assertRaisesRegex(ValueError, 'redirect'):
-                updater.download(updater.parse_release(release(), '0.6.0'), temp)
+        with tempfile.TemporaryDirectory() as temp, patch('updater.request', return_value=response), \
+                self.assertRaisesRegex(ValueError, 'redirect'):
+            updater.download(updater.parse_release(release(), '0.6.0'), temp)
 
     def test_installer_scope_quoting_and_backup(self):
         with tempfile.TemporaryDirectory(prefix="trainer's-") as temp:

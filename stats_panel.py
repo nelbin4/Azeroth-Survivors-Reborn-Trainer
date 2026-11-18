@@ -150,10 +150,10 @@ class StatsPanel:
         policy.set_enabled(self.selected, enabled)
         self.load_target()
         self.persist_preferences()
-        if enabled and not policy.paused and not policy.searching and self.selected not in policy.verified:
-            if controller.connected_session():
-                controller.find()
-                return 'break'
+        if (enabled and not policy.paused and not policy.searching
+                and self.selected not in policy.verified and controller.connected_session()):
+            controller.find()
+            return 'break'
         controller.changed()
         return 'break'
 
@@ -166,6 +166,9 @@ class StatsPanel:
     def apply(self):
         controller = self.controller
         policy = controller.policy
+        if controller.last.get('role', controller.role) == 'guest':
+            self.error.set('Guest session · stats are read-only.')
+            return
         try:
             policy.set_target(self.selected, self.target.get())
         except (ValueError, OverflowError) as exc:
@@ -303,7 +306,7 @@ class StatsPanel:
         if unavailable:
             self.help.set('Hunt could not verify this stat on the current build.')
         self.apply_button.configure(text='Apply' if can_apply else 'Queue target',
-                                    state='disabled' if enabled or unavailable or view.key == 'health' else 'normal')
+                                    state='disabled' if enabled or unavailable or view.key == 'health' or role == 'guest' else 'normal')
 
         if self.advanced is not None and self.advanced.winfo_exists():
             self.refresh_detection_details(connected_session)

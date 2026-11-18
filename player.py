@@ -195,9 +195,8 @@ class Player:
         for key, value in list(self.frozen.items()):
             if snapshot['values'][key] != value:
                 self.set_stat(key, value)
-        if 'max_health' in self.frozen:
-            if snapshot['hp'] != snapshot['maximum']:
-                self.heal()
+        if 'max_health' in self.frozen and snapshot['hp'] != snapshot['maximum']:
+            self.heal()
         if self.xp_assist and snapshot['xp'] != snapshot['next_xp'] - 1:
             self.ready_level()
         return self.snapshot()
