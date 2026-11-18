@@ -107,7 +107,7 @@ class StatsControllerTests(unittest.TestCase):
             self.assertEqual(kwargs['keys'],{'damage'})
             return dict(held={'damage':9999},errors={},values={'damage':9999})
         worker.freezer.apply.side_effect=apply
-        policy=StatsPolicy();policy.searching=True;policy.freeze('armor',False)
+        policy=StatsPolicy();policy.searching=True;policy.set_enabled('armor',False)
         self.assertEqual(policy.request()['keys'], set())
         from session_role import RoleLease
         request=policy.request();request['role_lease']=RoleLease(session,0x10000,0x20000)
@@ -140,7 +140,7 @@ class StatsControllerTests(unittest.TestCase):
                 worker.hunt.step.return_value=dict(heroes=[dict(hero=1000,identity=91,count=1)],ambiguous=False,partial=False)
                 worker.freezer.observe.return_value=(FieldProof('damage',0x200,'I',9999,((0x100,b'proof'),)),)
                 worker.freezer.apply.return_value=dict(held={},confirmed={},errors={},values={'damage':7})
-                policy=StatsPolicy();policy.freeze('damage',True)
+                policy=StatsPolicy();policy.set_enabled('damage',True)
                 request=policy.request();request.update(host=True,role_lease=RoleLease(session,0x10000,0x20000))
                 with patch.object(RoleLease,'reader',return_value=SimpleNamespace(read=lambda memory:role)):
                     result=worker.run(session,None,request,lambda:False)

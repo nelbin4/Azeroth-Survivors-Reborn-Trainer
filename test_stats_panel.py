@@ -32,13 +32,12 @@ class StatsPanelTests(unittest.TestCase):
         self.assertFalse(self.panel.controller.policy.searching)
 
     def test_selected_stat_editor_queues_validated_custom_values(self):
-        self.panel.controller.policy.set_enabled('crit', True)
         self.panel.controller.policy.accept('hero',{'crit':92})
-        self.panel.select('crit');self.panel.target.set('50');self.panel.apply(True)
+        self.panel.select('crit');self.panel.target.set('50');self.panel.apply()
         self.assertEqual(self.panel.controller.policy.request()['targets']['crit'],42)
         self.assertIn('crit',self.panel.controller.policy.pending)
         self.assertIn(self.panel.table.set('crit','state'), ('Queued', 'Checking role'))
-        self.panel.target.set('101');self.panel.apply(True)
+        self.panel.target.set('101');self.panel.apply()
         self.assertTrue(self.panel.error.get())
         self.assertEqual(self.panel.controller.policy.targets['crit'],50)
 
@@ -71,19 +70,18 @@ class StatsPanelTests(unittest.TestCase):
         policy = self.panel.controller.policy
         policy.accept('hero', {'damage': 7})
         self.assertIn('damage', policy.holds)
+        self.panel.toggle_selected_enabled(None)
         self.panel.target.set('50')
-        self.panel.apply(False)
+        self.panel.apply()
         self.assertNotIn('damage', policy.holds)
         self.assertIn('damage', policy.pending)
 
-    def test_periodic_refresh_updates_hold_without_overwriting_editor_choice(self):
-        policy = self.panel.controller.policy
-        policy.accept('hero', {'damage': 7})
+    def test_checked_stats_show_maximum_and_disable_manual_apply(self):
+        self.panel.controller.policy.accept('hero', {'damage': 7})
         self.panel.refresh()
-        self.assertTrue(self.panel.editor_frozen.get())
-        self.panel.editor_check.invoke()
-        self.panel.refresh()
-        self.assertFalse(self.panel.editor_frozen.get())
+        self.assertEqual(self.panel.target.get(), '9999')
+        self.assertTrue(self.panel.entry.instate(['disabled']))
+        self.assertTrue(self.panel.apply_button.instate(['disabled']))
 
     def test_progress_tracks_search_role_check_completion_and_cancel(self):
         self.panel.find_button.invoke()
@@ -106,11 +104,11 @@ class StatsPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.table.item('damage', 'image'), (str(self.panel.checkbox_images[True]),))
         self.panel.toggle_selected_enabled(None)
         self.assertEqual(self.panel.table.item('damage', 'image'), (str(self.panel.checkbox_images[False]),))
-        self.assertEqual(self.panel.table.set('damage', 'state'), 'Disabled')
-        self.assertTrue(self.panel.apply_button.instate(['disabled']))
+        self.assertEqual(self.panel.table.set('damage', 'state'), 'Manual')
+        self.assertTrue(self.panel.apply_button.instate(['!disabled']))
         self.panel.toggle_selected_enabled(None)
         self.assertEqual(self.panel.table.item('damage', 'image'), (str(self.panel.checkbox_images[True]),))
-        self.assertTrue(self.panel.apply_button.instate(['!disabled']))
+        self.assertTrue(self.panel.apply_button.instate(['disabled']))
         self.assertTrue(self.panel.controller.policy.searching)
 
     def test_advanced_opens_with_readable_detection_details(self):
@@ -127,9 +125,10 @@ class StatsPanelTests(unittest.TestCase):
         tabs = self.panel.advanced.winfo_children()[0]
         self.assertEqual(tabs.tab(tabs.select(), 'text'), 'Detection details')
         self.assertEqual(tabs.index(tabs.select()), 0)
-        self.assertEqual(self.panel.detection_fields['Game process'].get(), 'PID 123')
-        self.assertEqual(self.panel.detection_fields['Character'].get(), 'Tester · Level 11')
-        self.assertEqual(self.panel.detection_table.item('damage', 'values'),
-                         ('Damage bonus', '9,999%', '9,999%', 'Frozen'))
-        self.assertIn('Echo chance: Effect is not active.', self.panel.detection_warnings.get())
+        self.assertEqual([tabs.tab(tab, 'text') for tab in tabs.tabs()], ['Detection details', 'Manual value search'])
+        content = self.panel.diagnostics.get('1.0', 'end-1c')
+        self.assertIn('Game process: PID 123', content)
+        self.assertIn('Character: Tester · Level 11', content)
+        self.assertRegex(content, r'Damage bonus\s+9,999%\s+9,999%\s+Frozen')
+        self.assertIn('Echo chance: Effect is not active.', content)
         self.panel.advanced.destroy()

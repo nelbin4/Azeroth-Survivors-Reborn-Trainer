@@ -1,5 +1,4 @@
 """Stats table and selected-stat editor."""
-from pprint import pformat
 import time
 import tkinter as tk
 from tkinter import font, ttk
@@ -59,7 +58,7 @@ class StatsPanel:
         style.map('Stats.Treeview', background=[('selected', '#23443f')],
                   foreground=[('selected', '#ffffff')])
         self.table.configure(style='Stats.Treeview')
-        self.table.heading('#0', text='Enabled', anchor='center')
+        self.table.heading('#0', text='Freeze', anchor='center')
         self.table.column('#0', width=76, minwidth=76, stretch=False, anchor='center')
         self.checkbox_images = {enabled: self.make_checkbox(enabled) for enabled in (False, True)}
         for column, width, anchor in zip(columns, (175, 95, 105, 109), ('w', 'e', 'e', 'w')):
@@ -82,16 +81,10 @@ class StatsPanel:
         self.target = tk.StringVar()
         self.entry = ttk.Entry(editor, textvariable=self.target, width=20)
         self.entry.pack(anchor='w', pady=(4, 6))
-        self.entry.bind('<Return>', lambda event: self.apply(self.editor_frozen.get()))
-        self.editor_frozen = tk.BooleanVar()
-        self.freeze_edited = False
-        self.editor_check = ttk.Checkbutton(editor, text='Keep frozen', variable=self.editor_frozen,
-                                            command=self.edit_freeze)
-        self.editor_check.pack(anchor='w', pady=(0, 8))
+        self.entry.bind('<Return>', lambda event: self.apply())
         actions = ttk.Frame(editor)
         actions.pack(anchor='w')
-        self.apply_button = ttk.Button(actions, style='Accent.TButton',
-                                       command=lambda: self.apply(self.editor_frozen.get()))
+        self.apply_button = ttk.Button(actions, style='Accent.TButton', command=self.apply)
         self.apply_button.pack(side='left')
         self.maximum_button = ttk.Button(actions, text='Use maximum', command=self.use_maximum)
         self.maximum_button.pack(side='left', padx=(6, 0))
@@ -99,7 +92,6 @@ class StatsPanel:
         self.error = tk.StringVar()
         ttk.Label(editor, textvariable=self.help, wraplength=228, foreground='#a9b8c8').pack(anchor='w', pady=(10, 0))
         ttk.Label(editor, textvariable=self.error, wraplength=228, foreground='#efaaaa').pack(anchor='w')
-        self.xp = tk.BooleanVar(value=False)
         self.select('damage')
 
     def toggle_search(self):
@@ -138,14 +130,9 @@ class StatsPanel:
             self.load_target()
         self.refresh()
 
-    def edit_freeze(self):
-        self.freeze_edited = True
-
     def load_target(self):
-        self.freeze_edited = False
         policy = self.controller.policy
-        self.target.set('Match maximum' if self.selected == 'health' else str(policy.targets[self.selected]))
-        self.editor_frozen.set(self.selected in policy.holds)
+        self.target.set('Match maximum' if self.selected == 'health' else str(policy.effective_target(self.selected)))
         self.error.set('')
 
     def toggle_row_enabled(self, event):
@@ -161,7 +148,7 @@ class StatsPanel:
         policy = controller.policy
         enabled = self.selected not in policy.enabled
         policy.set_enabled(self.selected, enabled)
-        self.error.set('')
+        self.load_target()
         self.persist_preferences()
         if enabled and not policy.paused and not policy.searching and self.selected not in policy.verified:
             if controller.connected_session():
@@ -176,30 +163,25 @@ class StatsPanel:
         except OSError as exc:
             self.error.set(f'Could not save stat preferences: {exc}')
 
-    def apply(self, freeze):
-        policy = self.controller.policy
+    def apply(self):
+        controller = self.controller
+        policy = controller.policy
         try:
-            policy.set_target(self.selected, self.target.get(), freeze)
+            policy.set_target(self.selected, self.target.get())
         except (ValueError, OverflowError) as exc:
             self.error.set(str(exc))
             return
-        self.freeze_edited = False
         self.error.set('')
         self.persist_preferences()
-        self.controller.changed()
+        if not policy.searching and self.selected not in policy.verified and controller.connected_session():
+            controller.find()
+        else:
+            controller.changed()
 
     def use_maximum(self):
         view = BY_KEY[self.selected]
         self.target.set('Match maximum' if self.selected == 'health' else str(view.maximum))
         self.error.set('')
-
-    def change_xp(self):
-        self.controller.policy.xp = self.xp.get()
-        self.controller.changed()
-
-    def once_xp(self):
-        self.controller.policy.xp_once = True
-        self.controller.changed()
 
     def refresh_connection(self):
         state = (self.controller.session_provider(), self.controller.connected_session())
@@ -267,16 +249,16 @@ class StatsPanel:
             key = view.key
             frozen = key in policy.holds
             known = key in policy.verified
-            target = 'Full' if key == 'health' else f'{policy.targets[key]:,}{view.unit}'
+            target = 'Full' if key == 'health' else f'{policy.effective_target(key):,}{view.unit}'
             if key == 'max_health':
                 target = '≥ ' + target
             state = 'Searching' if policy.searching else 'Not found'
             enabled = key in policy.enabled
-            if not enabled:
-                state = 'Disabled'
+            if not enabled and key not in policy.pending:
+                state = 'Manual'
             elif read_only and known:
                 state = 'Checking role' if controller.role == 'unknown' else 'Read-only'
-            elif policy.paused and (frozen or key in policy.pending):
+            elif policy.paused and enabled:
                 state = 'Stopped'
             elif key in freeze.get('errors', {}):
                 state = 'Retrying' if known else 'Waiting'
@@ -292,35 +274,27 @@ class StatsPanel:
                 self.table.item(key, image=image, values=values)
 
         view = BY_KEY[self.selected]
-        if not self.freeze_edited:
-            self.editor_frozen.set(view.key in policy.holds)
         self.title.set(view.label)
         self.live.set(view.display(policy.values.get(view.key)))
         self.target_label.set('Target' + (f' ({view.unit})' if view.unit else ''))
         enabled = view.key in policy.enabled
-        self.entry.configure(state='normal' if enabled and view.key != 'health' else 'disabled')
-        self.editor_check.configure(state='normal' if enabled else 'disabled')
-        self.maximum_button.configure(state='normal' if enabled else 'disabled')
+        self.entry.configure(state='normal' if not enabled and view.key != 'health' else 'disabled')
+        self.maximum_button.configure(state='normal' if not enabled and view.key != 'health' else 'disabled')
         self.help.set(freeze.get('errors', {}).get(view.key) or view.note
                       or f'Range {view.minimum:,}–{view.maximum:,}{view.unit}')
-        if not enabled:
-            self.help.set('Check Enabled in the table to apply a target.')
-        can_apply = view.key in policy.verified and not (policy.paused or read_only)
+        if enabled:
+            self.help.set(freeze.get('errors', {}).get(view.key) or 'Checked stats freeze at maximum.')
+        can_apply = view.key in policy.verified and not read_only
         self.apply_button.configure(text='Apply' if can_apply else 'Queue target',
-                                    state='normal' if enabled else 'disabled')
+                                    state='disabled' if enabled else 'normal')
 
         if self.advanced is not None and self.advanced.winfo_exists():
-            xp_available = bool(last.get('xp_available'))
-            for control in (self.xp_check, self.xp_button):
-                control.configure(state='normal' if xp_available else 'disabled')
-            self.xp_status.set('XP controls require a verified solo layout.' if not xp_available else '')
             self.refresh_detection_details(connected_session)
 
     def refresh_detection_details(self, session):
         controller = self.controller
         policy = controller.policy
         result = controller.last
-        self.detection_status.set(self.summary.get())
         character = result['heroes'][0] if len(result.get('heroes', ())) == 1 else None
         if character:
             name = character.get('name') or 'Selected character'
@@ -341,70 +315,45 @@ class StatsPanel:
             'Verified stats': f'{len(policy.verified)} of {len(VIEWS)}',
             'Frozen': f'{len(frozen)} of {len(policy.enabled)} enabled',
         }
-        for label, value in fields.items():
-            self.detection_fields[label].set(value)
-
+        lines = [self.summary.get(), '']
+        lines.extend(f'{label}: {value}' for label, value in fields.items())
         errors = freeze.get('errors', {})
-        warnings = [f'{BY_KEY[key].label}: {message}' for key, message in errors.items() if key in policy.enabled]
+        warnings = [f'{BY_KEY[key].label}: {message}' for key, message in errors.items()
+                    if key in policy.enabled or key in policy.pending]
         if result.get('ambiguous'):
             warnings.insert(0, 'Multiple player allocations found. Writes are blocked until the character is verified.')
-        self.detection_warnings.set('\n'.join(warnings))
         if warnings:
-            self.warning_label.grid()
-        else:
-            self.warning_label.grid_remove()
-
+            lines.extend(('', 'Warnings', *warnings))
+        lines.extend(('', f"{'Stat':25} {'Current':>12} {'Target':>12}  Status"))
         for view in VIEWS:
-            values = self.table.item(view.key, 'values')
-            if tuple(self.detection_table.item(view.key, 'values')) != values:
-                self.detection_table.item(view.key, values=values)
+            label, current, target, status = self.table.item(view.key, 'values')
+            lines.append(f'{label:25} {current:>12} {target:>12}  {status}')
+        content = '\n'.join(lines)
+        if content != self.detection_content:
+            position = self.diagnostics.yview()[0]
+            self.diagnostics.configure(state='normal')
+            self.diagnostics.delete('1.0', 'end')
+            self.diagnostics.insert('1.0', content)
+            self.diagnostics.configure(state='disabled')
+            self.diagnostics.yview_moveto(position)
+            self.detection_content = content
 
     def copy_detection_details(self):
-        result = self.controller.last
         self.advanced.clipboard_clear()
-        self.advanced.clipboard_append(pformat(result, sort_dicts=False) if result else self.summary.get())
+        self.advanced.clipboard_append(self.detection_content)
         self.copy_detection_button.configure(text='Copied')
 
     def build_detection_details(self, parent):
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(4, weight=1)
+        self.detection_content = ''
         header = ttk.Frame(parent)
-        header.grid(row=0, column=0, sticky='ew', pady=(0, 6))
+        header.pack(fill='x', pady=(0, 8))
         ttk.Label(header, text='Detection details', font=('Segoe UI', 16, 'bold')).pack(side='left')
-        self.copy_detection_button = ttk.Button(header, text='Copy diagnostics', command=self.copy_detection_details)
+        self.copy_detection_button = ttk.Button(header, text='Copy details', command=self.copy_detection_details)
         self.copy_detection_button.pack(side='right')
-        self.detection_status = tk.StringVar()
-        ttk.Label(parent, textvariable=self.detection_status, foreground='#76dfc1',
-                  wraplength=840).grid(row=1, column=0, sticky='w', pady=(0, 8))
-
-        overview = ttk.Frame(parent)
-        overview.grid(row=2, column=0, sticky='ew', pady=(0, 10))
-        overview.columnconfigure(0, weight=1, uniform='overview')
-        overview.columnconfigure(1, weight=1, uniform='overview')
-        self.detection_fields = {}
-        for index, label in enumerate(('Game process', 'Build', 'Character', 'Session', 'Verified stats', 'Frozen')):
-            line = ttk.Frame(overview)
-            line.grid(row=index // 2, column=index % 2, sticky='ew', pady=2)
-            ttk.Label(line, text=label, width=16, foreground='#a9b8c8').pack(side='left')
-            value = self.detection_fields[label] = tk.StringVar()
-            ttk.Label(line, textvariable=value, wraplength=275).pack(side='left')
-
-        self.detection_warnings = tk.StringVar()
-        self.warning_label = ttk.Label(parent, textvariable=self.detection_warnings, foreground='#efaaaa', wraplength=840)
-        self.warning_label.grid(row=3, column=0, sticky='ew', pady=(0, 8))
-        table_area = ttk.Frame(parent)
-        table_area.grid(row=4, column=0, sticky='nsew')
-        columns = ('Stat', 'Current', 'Target', 'Status')
-        self.detection_table = ttk.Treeview(table_area, columns=columns, show='headings', style='Stats.Treeview')
-        for column, width, anchor in zip(columns, (270, 120, 120, 152), ('w', 'e', 'e', 'w')):
-            self.detection_table.heading(column, text=column, anchor=anchor)
-            self.detection_table.column(column, width=width, anchor=anchor, stretch=column == 'Stat')
-        for view in VIEWS:
-            self.detection_table.insert('', 'end', iid=view.key)
-        scroll = ttk.Scrollbar(table_area, orient='vertical', command=self.detection_table.yview)
-        scroll.pack(side='right', fill='y')
-        self.detection_table.configure(yscrollcommand=scroll.set)
-        self.detection_table.pack(side='left', fill='both', expand=True)
+        self.diagnostics = tk.Text(parent, font=('Consolas', 11), wrap='word',
+                                   padx=12, pady=10, background='#0c1826',
+                                   foreground='#e5e9ef', state='disabled')
+        self.diagnostics.pack(fill='both', expand=True)
 
     def open_advanced(self):
         if self.advanced is not None and self.advanced.winfo_exists():self.advanced.lift();return
@@ -417,14 +366,5 @@ class StatsPanel:
         self.build_detection_details(details)
         manual=ttk.Frame(tabs,padding=16);tabs.add(manual,text='Manual value search')
         add_manual_panel(self.root,manual,self.controller.session_provider,lambda:self.closing() or not window.winfo_exists())
-        actions = ttk.Frame(tabs, padding=16)
-        tabs.add(actions, text='XP')
-        self.xp_check = ttk.Checkbutton(actions, text='XP assistance', variable=self.xp,
-                                       command=self.change_xp)
-        self.xp_check.pack(anchor='w', pady=(0, 8))
-        self.xp_button = ttk.Button(actions, text='One XP from level-up', command=self.once_xp)
-        self.xp_button.pack(anchor='w')
-        self.xp_status = tk.StringVar()
-        ttk.Label(actions, textvariable=self.xp_status).pack(anchor='w', pady=8)
         tabs.select(details)
         self.refresh()

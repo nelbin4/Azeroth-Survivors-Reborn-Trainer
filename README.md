@@ -1,4 +1,4 @@
-# Azeroth Survivor Reborn Trainer 0.9.14
+# Azeroth Survivor Reborn Trainer 0.9.15
 
 Portable Windows trainer for Azeroth Survivors: Reborn. Verified stat controls support the
 original 0.6.3 game build and the newer `d76345ce7a4e`, `a02914e85f9b` and
@@ -15,7 +15,7 @@ extract it, and launch **Azeroth Survivor Reborn Trainer.exe**. If the game is
 closed, click **Run Game**. Start a solo run in the game,
 then click **Find** in the trainer. This starts automatic background Hunt.
 The default enabled stats are Damage bonus, Cooldown reduction, Area of effect,
-and Luck bonus. Enabled stats apply and freeze at their targets as soon as
+and Luck bonus. Checked stats apply and freeze at their maximums as soon as
 Hunt verifies them. Selections and targets are stored locally in
 `reborn-settings.json`. Keep the trainer open for active freezes.
 
@@ -43,24 +43,19 @@ leaves the game running.
 
 **Stats** shows current values, targets, freeze settings and status in one
 table. Select a row to edit it in the side panel. All stats are shown in one table.
-Click a row’s **Enabled** checkbox or press Space on that row. Unchecked stats remain visible and receive no writes. Enabling a stat applies and freezes its target once verified. **Keep frozen** in the editor controls whether an enabled stat holds its target.
+Click a row’s **Freeze** checkbox or press Space on that row. Checked stats
+apply their maximum and hold it once verified. Unchecked stats can be changed
+once by editing the target and pressing **Apply**. **Use maximum** fills the
+manual target with the trainer limit.
 
-**Find** becomes available after the trainer connects to the selected game process. It starts background discovery. The progress bar and elapsed timer show when Hunt is working. A first search typically takes 1–3 minutes. **Stop search** stops finding new
-allocations while verified existing holds can continue. **Stop Freeze** stops
-stat and XP writes while discovery continues. **Resume Freeze** keeps configured targets
-and freeze preferences. Pending, ambiguous or stale fields are never written.
+**Find** starts background discovery after the trainer connects to Reborn.
+**Stop search** stops finding new allocations while verified holds can continue.
+**Stop Freeze** suspends holds while allowing manual Apply. **Resume Freeze**
+reapplies the checked stats.
 
-Set a target and click **Apply**. Check **Keep frozen** to keep applying it,
-or clear it to apply once. **Use maximum** fills the target field.
-Crit targets are displayed as total chance/damage; the backend
-converts them to bonuses above the game's native base. Echo uses percentage
-units in the editor and its native float representation in memory. Current
-health follows the live verified maximum. Maximum-health targets are minimums;
-larger native bonuses are preserved.
+**Advanced** opens Detection details first as readable plain text. **Copy details**
+copies the displayed text. The other tab is Manual value search.
 
-**Advanced** opens Detection details first. It shows the verified character, session, stat readings, and any errors. Use **Copy diagnostics** for the raw data. Advanced also contains manual searches and XP controls for verified solo layouts.
-
-Disabling a per-stat hold or closing the trainer leaves the current stat value in place.
 Game, build, and player ownership changes invalidate stale results before any further write.
 
 ## Trainer updates
@@ -92,7 +87,7 @@ No numeric values need to be entered. It keeps running when another tab is selec
 taking focus from the game. It uses the same Stats interface on supported older layouts and newer
 independently proven layouts, and discards stale results after process changes.
 
-**Max & freeze each verified stat as soon as it is found** is enabled by default.
+Checked stats freeze at maximum as soon as they are verified.
 After a complete initial search and two stable observations of one solo owner,
 each independently proven field is maximized and held without waiting for the
 remaining fields. Holds run every half-second and skip unchanged values. Search
@@ -193,7 +188,7 @@ Hold polling skips unchanged values and uses no injected code.
 
 ## Player controls
 
-Enabled stats default to the trainer limits below.
+Checked stats use the trainer limits below.
 Current-health holds heal to full. These are bounded
 trainer limits; they are not a claim that every value has a native maximum.
 
@@ -215,10 +210,7 @@ trainer limits; they are not a claim that every value has a native maximum.
 | Run gold | 99,999,999 |
 | Free rerolls | 9,999 |
 
-Each stat has an editor and a per-stat Freeze setting. Holds reapply
-after native recalculations. Current health can be applied once to heal to full.
-XP assistance and One XP from level-up retain the independently verified full
-player/name contract and are unavailable when that contract is missing.
+Holds reapply after native recalculations. Uncheck Current health and press Apply to heal to full once.
 
 After Find, Hunt follows new runs and validates their fresh solo ownership before
 resuming eligible holds. Stop search does not locate a new allocation until Find
@@ -257,7 +249,7 @@ Unofficial fan tool. MIT license; see LICENSE.
 
 Hunt verifies the selected character's live identity string using corroborating code proofs. Names are read dynamically; no test character name is hardcoded. The scan resumes at the exact candidate after its probe budget is exhausted, so dense stacks do not hide the active player array.
 
-**Host session (automatic)** follows the game's live lobby role. It checks itself for a verified host and clears itself for a guest or a solo/no-lobby session. Guests and unknown roles cannot authorize stat writes, including a guest currently alone in a player array. There is no manual host override. Only the character selected by the verified game index is eligible; other party members are left alone. XP assistance remains solo-only.
+**Host session (automatic)** follows the game's live lobby role. It checks itself for a verified host and clears itself for a guest or a solo/no-lobby session. Guests and unknown roles cannot authorize stat writes, including a guest currently alone in a player array. There is no manual host override. Only the character selected by the verified game index is eligible; other party members are left alone.
 
 Role discovery runs read-only in the background when the game is detected. A cold scan or a UI runtime reload may take longer on processes with large memory footprints; the UI stays responsive and stat writes wait for verification. A process-bound address cache is always revalidated against the live Lua main thread, global environment and current lobby table. Runtime, PID, global-table and lobby changes invalidate old ownership. Role is checked again before every stat write. Find still starts stat discovery and automatic max/freeze.
 

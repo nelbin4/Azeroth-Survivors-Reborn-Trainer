@@ -13,10 +13,8 @@ class StatsPolicyTests(unittest.TestCase):
 
     def test_custom_targets_keep_concrete_native_units_and_validate(self):
         policy=StatsPolicy()
-        policy.set_enabled('crit', True)
-        policy.set_enabled('echo', True)
-        policy.set_target('crit',50,True)
-        policy.set_target('echo',35,True)
+        policy.set_target('crit',50)
+        policy.set_target('echo',35)
         self.assertEqual(policy.request()['targets']['crit'],42)
         self.assertEqual(policy.request()['targets']['echo'],.35)
         for invalid in (-1,101,50.5,'nan','inf'):
@@ -27,7 +25,7 @@ class StatsPolicyTests(unittest.TestCase):
         policy=StatsPolicy()
         policy.accept('hero',{'damage':7})
         self.assertEqual(policy.holds,{'damage'})
-        policy.freeze('damage',False)
+        policy.set_enabled('damage',False)
         policy.accept('hero',{})
         policy.accept('hero',{'damage':9,'luck':3})
         self.assertEqual(policy.holds,{'luck'})
@@ -43,7 +41,9 @@ class StatsPolicyTests(unittest.TestCase):
 
     def test_one_time_apply_and_stopping_search_do_not_force_holds(self):
         policy=StatsPolicy()
-        policy.accept('hero',{'damage':7});policy.set_target('damage',123)
+        policy.accept('hero',{'damage':7})
+        policy.set_enabled('damage', False)
+        policy.set_target('damage',123)
         self.assertNotIn('damage',policy.holds)
         self.assertIn('damage',policy.request()['keys'])
         self.assertFalse(policy.request()['discover'])
@@ -54,8 +54,8 @@ class StatsPolicyTests(unittest.TestCase):
         policy = StatsPolicy()
         self.assertEqual(policy.enabled, {'damage', 'cooldown', 'area', 'luck'})
         policy.set_enabled('damage', False)
+        policy.set_target('crit', 51)
         policy.set_enabled('crit', True)
-        policy.set_target('crit', 51, freeze=True)
         reloaded = StatsPolicy(policy.preferences())
         self.assertEqual(reloaded.enabled, {'crit', 'cooldown', 'area', 'luck'})
         self.assertEqual(reloaded.targets['crit'], 51)
@@ -74,7 +74,7 @@ class StatsPolicyTests(unittest.TestCase):
         policy = StatsPolicy()
         self.assertFalse(policy.request()['auto_keys'])
         policy.searching = True
-        policy.freeze('damage', False)
+        policy.set_enabled('damage', False)
         self.assertNotIn('damage', policy.request()['auto_keys'])
         self.assertIn('luck', policy.request()['auto_keys'])
         policy.paused = True
@@ -83,19 +83,25 @@ class StatsPolicyTests(unittest.TestCase):
         policy.searching = False
         self.assertFalse(policy.request()['auto_keys'])
 
-    def test_disabling_cancels_writes_and_enabling_restarts_hold(self):
+    def test_checking_always_uses_maximum_and_cancels_pending_custom_value(self):
         policy = StatsPolicy()
-        policy.searching = True
-        policy.accept('hero', {'damage': 7, 'armor': 3})
-        policy.set_target('damage', 125, freeze=True)
-        policy.set_enabled('damage', False)
-
-        request = policy.request()
-        self.assertEqual(policy.targets['damage'], 125)
-        self.assertEqual(policy.values['damage'], 7)
-        self.assertNotIn('damage', request['keys'] | request['auto_keys'] | request['pending'])
-        self.assertNotIn('armor', request['keys'] | request['auto_keys'])
+        policy.accept('hero', {'crit': 3})
+        policy.set_target('crit', 51)
+        self.assertEqual(policy.request()['targets']['crit'], 43)
+        policy.set_enabled('crit', True)
+        self.assertNotIn('crit', policy.pending)
+        self.assertIn('crit', policy.holds)
+        self.assertEqual(policy.request()['targets']['crit'], 92)
         with self.assertRaises(ValueError):
-            policy.set_target('damage', 50)
-        policy.set_enabled('damage', True)
-        self.assertIn('damage', policy.request()['keys'])
+            policy.set_target('crit', 50)
+        policy.set_enabled('crit', False)
+        self.assertEqual(policy.effective_target('crit'), 51)
+        self.assertNotIn('crit', policy.request()['keys'])
+
+    def test_stop_freeze_allows_explicit_one_time_apply(self):
+        policy = StatsPolicy()
+        policy.accept('hero', {'damage': 7, 'crit': 3})
+        policy.paused = True
+        policy.set_target('crit', 50)
+        self.assertEqual(policy.request()['keys'], {'crit'})
+        self.assertFalse(policy.request()['auto_keys'])

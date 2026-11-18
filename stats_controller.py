@@ -3,7 +3,6 @@ from contextlib import nullcontext
 import hashlib
 from pathlib import Path
 import queue
-import struct
 import threading
 import time
 
@@ -12,7 +11,7 @@ from compatibility import Layout
 from hunt_fields import FieldProof
 from game_process import same_path
 from hunt_freeze import HuntFreezer
-from player import Player, STATS
+from player import STATS
 from stats_model import StatsPolicy
 from session_role import RoleMonitor, RoleLease
 
@@ -66,7 +65,7 @@ class StatsWorker:
             result=self.hunt.step(session,reader,cancelled=cancelled,plan_source=source,discover=request['discover'])
             fields=self.freezer.observe(self.hunt,result)
             role=current_role()
-            result.update(values={},freeze=dict(held={},errors={}),xp_available=False,xp_done=False,role=role)
+            result.update(values={},freeze=dict(held={},errors={}),role=role)
             if not fields:return result
             owner=result['heroes'][0]
             result['owner']=(session,self.hunt.plan.digest,owner['hero'],owner['identity'],owner.get('count',1),owner.get('index',0),owner.get('name'))
@@ -76,10 +75,7 @@ class StatsWorker:
             multiplayer=owner.get('count',1)>1
             permitted=role=='host' or (role=='none' and not multiplayer)
             result['host_required']=not permitted
-            result['xp_available'] = layout is not None and not multiplayer and role == 'none'
-            xp = (result['xp_available'] and not request['paused']
-                  and (request['xp'] or request['xp_once']))
-            writes = bool(wanted or xp) and not request['paused'] and permitted
+            writes = bool(wanted) and permitted
             borrowed=bool(native and native.process.pid==session.pid and native.created==session.created and native.lock)
             gate=native.write_gate if borrowed else nullcontext()
             with gate:
@@ -94,19 +90,6 @@ class StatsWorker:
                                           authorize=lambda:current_role()=='host' if multiplayer else current_role() in ('host','none'))
                 result['values']=outcome['values']
                 result['freeze']=outcome
-                if xp and not cancelled():
-                    # XP actions retain the old independent name/header proof;
-                    # they are never enabled for an unverified partial layout.
-                    raw=reader.read(owner['hero'],layout.stride)
-                    cap,pointer,length=struct.unpack_from('<3Q',raw,layout.name)
-                    if not 1<=length<=cap<=128:raise RuntimeError('Character name is unavailable for XP verification.')
-                    name=reader.read(pointer,length).decode('utf-8')
-                    candidate=Player(native)
-                    candidate.lease=dict(game=hex(owner['game']),hero=hex(owner['hero']),guid=owner['identity'],
-                                         name=name,level=owner['level'])
-                    if not cancelled() and current_role() == 'none':
-                        candidate.ready_level()
-                        result['xp_done'] = True
             return result
         except Exception:
             self.freezer.reset()
@@ -180,7 +163,6 @@ class StatsController:
 
     def invalidate(self):
         self.policy.pending.clear()
-        self.policy.xp_once = False
         self.policy.accept(None,{})
         self.last={}
         self.changed()
@@ -192,7 +174,6 @@ class StatsController:
         role,lease=self.role_monitor.snapshot(session)
         if (role,lease)!=(self.role,self.role_lease):
             self.role,self.role_lease=role,lease
-            self.last.pop('xp_available', None)
             if role == 'guest':
                 self.message = 'Guest session · stats are read-only.'
             elif self.policy.searching:
@@ -201,7 +182,6 @@ class StatsController:
         if session!=self.session:
             if self.session is not None:
                 self.policy.pending.clear()
-                self.policy.xp_once = False
             self.session=session
             self.policy.accept(None,{})
             self.last={}
@@ -222,8 +202,7 @@ class StatsController:
                     self.policy.accept(result.get('owner'),result['values'])
                     successful=set(result['freeze'].get('held',{}))
                     self.policy.pending.difference_update(successful)
-                    if result.get('xp_done'):self.policy.xp_once=False
-                    held=len(set(result['freeze'].get('confirmed',{}))&self.policy.holds)
+                    held = 0 if self.policy.paused else len(set(result['freeze'].get('confirmed', {})) & self.policy.holds)
                     selected=result.get('heroes',[{}])[0] if result.get('heroes') else {}
                     who = f" · {selected.get('name') or 'player'}" if selected else ''
                     if selected.get('level') is not None:
@@ -243,7 +222,7 @@ class StatsController:
         except queue.Empty:pass
         cached=(self.worker.mode is not None and self.worker.mode[0]==session and self.worker.hunt.plan is not None)
         monitor=bool(self.policy.searching or self.policy.verified or
-                     (cached and (self.policy.holds or self.policy.pending or self.policy.xp)))
+                     (cached and (self.policy.holds or self.policy.pending)))
         if session and monitor and not self.busy and time.monotonic()>=self.next_scan:
             request=self.policy.request()
             request['role_lease']=self.role_lease

@@ -1,3 +1,4 @@
-Azeroth Survivor Reborn Trainer v0.9.14
+Azeroth Survivor Reborn Trainer v0.9.15
 
-- Open Advanced on Detection details. Show a readable session summary, stat table, and warnings with raw diagnostics available to copy.
+- Checked stats always freeze at their maximum. Unchecked stats accept one-time targets through Apply, including while automatic freezes are stopped.
+- Remove the XP tab and show Detection details as readable plain text.

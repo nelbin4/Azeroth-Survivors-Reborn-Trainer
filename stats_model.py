@@ -68,15 +68,12 @@ class StatsPolicy:
                     continue
                 self.targets[key] = value
         self.holds=set()
-        self.overrides=set()
         self.pending=set()
         self.verified=set()
         self.values={}
         self.owner=None
         self.paused=False
         self.searching=False
-        self.xp=False
-        self.xp_once=False
 
     def accept(self,owner,values):
         if owner!=self.owner:
@@ -84,43 +81,38 @@ class StatsPolicy:
             self.verified.clear()
             self.values.clear()
         new=set(values)-self.verified
-        self.holds.update((new & self.enabled) - self.overrides)
+        self.holds.update(new & self.enabled)
         self.verified=set(values)
         self.values=dict(values)
 
-    def set_target(self,key,value,freeze=False,apply=True):
-        view=BY_KEY[key]
-        if key not in self.enabled:
-            raise ValueError('Enable this stat before applying a target.')
-        view.native(value)
-        self.targets[key]=view.maximum if key=='health' else int(float(value))
-        self.freeze(key, freeze)
-        if apply:self.pending.add(key)
+    def effective_target(self, key):
+        return BY_KEY[key].maximum if key in self.enabled else self.targets[key]
 
-    def freeze(self,key,enabled):
-        if enabled:self.holds.add(key)
-        else:
-            self.holds.discard(key)
-            self.pending.discard(key)
-        self.overrides.add(key)
+    def set_target(self, key, value):
+        if key in self.enabled:
+            raise ValueError('Uncheck this stat to apply a one-time target.')
+        view = BY_KEY[key]
+        view.native(value)
+        self.targets[key] = view.maximum if key == 'health' else int(float(value))
+        self.pending.add(key)
 
     def preferences(self):
         return {'enabled': sorted(self.enabled), 'targets': dict(self.targets)}
 
     def set_enabled(self, key, enabled):
+        self.pending.discard(key)
         if enabled:
             self.enabled.add(key)
-            self.overrides.discard(key)
             self.holds.add(key)
         else:
             self.enabled.discard(key)
             self.holds.discard(key)
-            self.pending.discard(key)
 
     def request(self):
-        automatic = self.enabled - self.overrides if self.searching and not self.paused else set()
+        automatic = self.enabled.copy() if self.searching and not self.paused else set()
+        held = self.holds & self.enabled if not self.paused else set()
         return dict(auto_keys=automatic,
-                    targets={k:BY_KEY[k].native(v) for k,v in self.targets.items() if k!='health'},
-                    keys=set() if self.paused else (self.holds | self.pending) & self.enabled,
-                    pending=set(self.pending),discover=self.searching,paused=self.paused,
-                    xp=self.xp and not self.paused,xp_once=self.xp_once and not self.paused)
+                    targets={key: view.native(self.effective_target(key))
+                             for key, view in BY_KEY.items() if key != 'health'},
+                    keys=held | (self.pending - self.enabled),
+                    pending=self.pending.copy(), discover=self.searching)
