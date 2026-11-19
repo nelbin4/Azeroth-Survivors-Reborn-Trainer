@@ -177,6 +177,26 @@ pub fn launch(path: &Path) -> io::Result<Session> {
     Ok(session)
 }
 
+pub fn stop(session: &Session) -> io::Result<()> {
+    use windows_sys::Win32::System::Threading::{PROCESS_TERMINATE, TerminateProcess};
+
+    let handle = Handle::new(unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+            0,
+            session.pid,
+        )
+    })?;
+    if identity(session.pid, &handle)? != *session {
+        return Err(io::Error::other("Reborn process identity changed."));
+    }
+    // The queried handle pins this process even if the PID is later reused.
+    if unsafe { TerminateProcess(handle.0, 1) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 pub struct Reader(Handle);
 
 #[repr(C)]

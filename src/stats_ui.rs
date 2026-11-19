@@ -1,0 +1,104 @@
+use serde_json::Value;
+
+pub struct Stat {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub min: u32,
+    pub max: u32,
+    pub percent: bool,
+}
+
+macro_rules! stat {
+    ($key:literal, $label:literal, $min:literal, $max:literal, $percent:literal) => {
+        Stat {
+            key: $key,
+            label: $label,
+            min: $min,
+            max: $max,
+            percent: $percent,
+        }
+    };
+}
+
+pub const STATS: [Stat; 17] = [
+    stat!("damage", "Damage bonus", 0, 9999, true),
+    stat!("crit", "Critical strike", 8, 100, true),
+    stat!("crit_damage", "Critical damage", 50, 10049, true),
+    stat!("cooldown", "Cooldown reduction", 0, 80, true),
+    stat!("area", "Area of effect", 0, 1000, true),
+    stat!("targets", "Extra targets", 0, 32, false),
+    stat!("echo", "Echo chance", 0, 100, true),
+    stat!("health", "Current health", 0, 1000000, false),
+    stat!("max_health", "Maximum health", 1, 1000000, false),
+    stat!("armor", "Damage reduction", 0, 60, true),
+    stat!("regen", "Regeneration bonus", 0, 9999, false),
+    stat!("speed", "Movement speed bonus", 0, 200, true),
+    stat!("pickup", "Pickup range bonus", 0, 9999, true),
+    stat!("gold_bonus", "Gold find bonus", 0, 9999, true),
+    stat!("luck", "Luck bonus", 0, 9999, true),
+    stat!("run_gold", "Run gold", 0, 99999999, false),
+    stat!("rerolls", "Rerolls", 0, 9999, false),
+];
+
+impl Stat {
+    pub fn checked(&self, prefs: Option<&Value>) -> bool {
+        prefs
+            .and_then(|data| data.get("enabled"))
+            .and_then(Value::as_array)
+            .map_or_else(
+                || matches!(self.key, "damage" | "cooldown" | "area" | "luck"),
+                |keys| keys.iter().any(|key| key.as_str() == Some(self.key)),
+            )
+    }
+
+    pub fn target(&self, prefs: Option<&Value>) -> String {
+        if self.key == "health" {
+            return "Full".into();
+        }
+        let manual = prefs
+            .and_then(|data| data.get("targets"))
+            .and_then(|targets| targets.get(self.key))
+            .and_then(Value::as_u64)
+            .filter(|value| (u64::from(self.min)..=u64::from(self.max)).contains(value));
+        let target = if self.checked(prefs) {
+            u64::from(self.max)
+        } else {
+            manual.unwrap_or(u64::from(self.max))
+        };
+        let prefix = if self.key == "max_health" { "≥ " } else { "" };
+        let unit = if self.percent { "%" } else { "" };
+        format!("{prefix}{}{unit}", grouped(target))
+    }
+}
+
+pub fn grouped(number: u64) -> String {
+    let number = number.to_string();
+    let mut value = String::with_capacity(number.len() + number.len() / 3);
+    for (index, digit) in number.chars().enumerate() {
+        if index != 0 && (number.len() - index).is_multiple_of(3) {
+            value.push(',');
+        }
+        value.push(digit);
+    }
+    value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn renders_saved_targets_and_keeps_checked_stats_at_maximum() {
+        let prefs =
+            json!({"enabled": ["damage"], "targets": {"damage": 700, "crit": 42, "rerolls": -1}});
+        let stat = |key| STATS.iter().find(|stat| stat.key == key).unwrap();
+        assert_eq!(stat("damage").target(Some(&prefs)), "9,999%");
+        assert_eq!(stat("crit").target(Some(&prefs)), "42%");
+        assert_eq!(stat("rerolls").target(Some(&prefs)), "9,999");
+        assert_eq!(stat("health").target(Some(&prefs)), "Full");
+        assert_eq!(stat("max_health").target(None), "≥ 1,000,000");
+        assert!(stat("cooldown").checked(None));
+        assert!(!stat("cooldown").checked(Some(&prefs)));
+    }
+}

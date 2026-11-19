@@ -52,6 +52,10 @@ impl Settings {
             .map(Path::new)
     }
 
+    pub fn stat_preferences(&self) -> Option<&Value> {
+        self.fields.get("stats")
+    }
+
     pub fn set_game_path(&mut self, path: &Path) -> io::Result<()> {
         let Some(file) = &self.path else {
             return Err(io::Error::other("Settings could not be loaded."));
