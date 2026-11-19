@@ -88,13 +88,18 @@ fn register(instruction: &Instruction, index: u32) -> Option<Register> {
         .then(|| instruction.op_register(index))
 }
 
-fn load(instruction: &Instruction) -> Option<(Register, Register, usize)> {
+fn load_register(instruction: &Instruction) -> Option<Register> {
     let destination = register(instruction, 0)?;
-    if instruction.mnemonic() != Mnemonic::Mov
-        || instruction.op1_kind() != OpKind::Memory
-        || !destination.is_gpr64()
-        || instruction.memory_index() != Register::None
-    {
+    (instruction.mnemonic() == Mnemonic::Mov
+        && instruction.op1_kind() == OpKind::Memory
+        && destination.is_gpr64()
+        && instruction.memory_size().size() == 8)
+        .then_some(destination)
+}
+
+fn load(instruction: &Instruction) -> Option<(Register, Register, usize)> {
+    let destination = load_register(instruction)?;
+    if instruction.memory_index() != Register::None {
         return None;
     }
     Some((
@@ -217,7 +222,7 @@ fn name_drop(root: Root, instructions: &[Instruction]) -> Option<usize> {
     let [capacity, cmp, branch, test, empty, pointer, call, ..] = instructions else {
         return None;
     };
-    let (reg, _, _) = load(capacity)?;
+    let reg = load_register(capacity)?;
     let offset = root.field(capacity)?;
     if cmp.mnemonic() != Mnemonic::Cmp
         || register(cmp, 0)? != reg
@@ -228,7 +233,9 @@ fn name_drop(root: Root, instructions: &[Instruction]) -> Option<usize> {
         || register(test, 1)? != reg
         || empty.mnemonic() != Mnemonic::Je
         || empty.near_branch_target() != branch.near_branch_target()
-        || load(pointer)?.0 != Register::RCX
+        || load_register(pointer)? != Register::RCX
+        || pointer.memory_base() == reg
+        || pointer.memory_index() == reg
         || root.field(pointer)? != offset.checked_add(8)?
         || call.mnemonic() != Mnemonic::Call
         || empty.near_branch_target() != call.next_ip()
@@ -605,5 +612,24 @@ mod tests {
                 .to_string()
                 .contains("Player identity unavailable")
         );
+    }
+
+    #[test]
+    fn identity_drop_accepts_indexed_capacity_and_keeps_the_hero_alias() {
+        // RAX initially holds the vector pointer and RCX the scaled index.
+        // The capacity load replaces RAX, but RBX still holds the hero.
+        let owner = Root {
+            array: [0x12A0, 0xDC0, 0xDB8, 0x1A90],
+            pointer: Register::RAX,
+            scaled: Register::RCX,
+            hero: Register::RBX,
+        };
+        let bytes = b"\x48\x8b\x84\x08\x10\x13\0\0\x48\x83\xf8\xff\x74\x11\x48\x85\xc0\x74\x0c\x48\x8b\x8b\x18\x13\0\0\xe8\0\0\0\0";
+        let routine: Vec<_> = instructions(bytes, 0x1000, 7).collect();
+        assert_eq!(name_drop(owner, &routine), Some(0x1310));
+
+        let clobbered = b"\x48\x8b\x84\x08\x10\x13\0\0\x48\x83\xf8\xff\x74\x12\x48\x85\xc0\x74\x0d\x48\x8b\x8c\x08\x18\x13\0\0\xe8\0\0\0\0";
+        let routine: Vec<_> = instructions(clobbered, 0x1000, 7).collect();
+        assert_eq!(name_drop(owner, &routine), None);
     }
 }
