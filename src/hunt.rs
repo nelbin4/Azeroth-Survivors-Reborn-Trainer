@@ -637,7 +637,7 @@ pub struct ApplyOutcome {
     pub lease: RoleProof,
     pub role: Role,
     pub values: Values,
-    pub applied: usize,
+    pub applied: BTreeSet<&'static str>,
     pub skipped: BTreeMap<&'static str, String>,
 }
 
@@ -752,7 +752,7 @@ pub fn apply_stats(
         lease,
         role,
         values: Values::new(),
-        applied: 0,
+        applied: BTreeSet::new(),
         skipped: BTreeMap::new(),
     };
     let mut writer = None;
@@ -842,7 +842,7 @@ pub fn apply_stats(
             );
         }
         outcome.values.insert(field.key, field.display(after));
-        outcome.applied += 1;
+        outcome.applied.insert(field.key);
     }
     Ok(outcome)
 }

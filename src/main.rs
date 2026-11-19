@@ -84,7 +84,7 @@ fn main() -> eframe::Result {
         .and_then(|_| arguments.next())
         .map(std::path::PathBuf::from);
     let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_inner_size([1010.0, 810.0])
+        .with_inner_size([980.0, 810.0])
         .with_resizable(false);
     if let Ok(icon) = app::icon() {
         viewport = viewport.with_icon(icon);

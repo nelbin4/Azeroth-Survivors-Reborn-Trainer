@@ -96,6 +96,7 @@ pub struct TrainerApp {
     cached_role: Option<RoleProof>,
     last_verified_role: Option<crate::session_role::Role>,
     last_apply_error: Option<String>,
+    applied_stats: std::collections::BTreeSet<&'static str>,
     field_issues: std::collections::BTreeMap<&'static str, String>,
     snapshot: Option<Snapshot>,
     status: String,
@@ -233,6 +234,7 @@ impl TrainerApp {
             cached_role: None,
             last_verified_role: None,
             last_apply_error: None,
+            applied_stats: std::collections::BTreeSet::new(),
             field_issues: Default::default(),
             snapshot: None,
             status: "Start Reborn to find a character.".into(),
@@ -270,6 +272,7 @@ impl TrainerApp {
             self.scan = None;
             self.reset_apply();
             self.snapshot = None;
+            self.applied_stats.clear();
             self.status = if self.session.is_some() {
                 "Start a run, then click Find.".into()
             } else if self.running {
@@ -425,7 +428,8 @@ impl TrainerApp {
                     self.cached_role = Some(result.lease);
                     self.last_verified_role = Some(result.role);
                     self.field_issues = result.skipped;
-                    let count = result.applied;
+                    let count = result.applied.len();
+                    self.applied_stats.extend(result.applied);
                     let warning = self.field_issues.len();
                     self.status = format!(
                         "Apply · {count} applied{}",
@@ -496,6 +500,7 @@ impl TrainerApp {
             }
             self.reset_apply();
             self.snapshot = None;
+            self.applied_stats.clear();
             self.error = None;
             self.status = "Finding the selected character…".into();
             event("hunt.requested", format_args!("game_pid={}", session.pid));
@@ -577,6 +582,9 @@ impl TrainerApp {
         }
         .into();
         self.field_issues.clear();
+        for key in targets.keys() {
+            self.applied_stats.remove(key);
+        }
         let result = task(context, move || {
             hunt::apply_stats(&proof, &targets, lease, &worker_stop)
         });
@@ -752,6 +760,7 @@ impl TrainerApp {
             self.scan = None;
             self.reset_apply();
             self.snapshot = None;
+            self.applied_stats.clear();
             self.stop_result = Some(task(context, move || process::stop(&session)));
         }
     }
@@ -810,16 +819,12 @@ impl TrainerApp {
                         .snapshot
                         .as_ref()
                         .is_some_and(|s| s.values.contains_key(stat.key));
-                    let status = if self.field_issues.contains_key(stat.key) {
-                        "Skipped"
-                    } else if verified {
-                        "Verified"
-                    } else if current.is_some() {
-                        "Diagnostic"
-                    } else if self.scan.is_some() {
-                        "Searching"
+                    let (status, status_color) = if self.applied_stats.contains(stat.key) {
+                        ("Applied", MINT)
+                    } else if verified || current.is_some() {
+                        ("Found", TEXT)
                     } else {
-                        "—"
+                        ("-", MUTED)
                     };
                     body.row(29.0, |mut row| {
                         row.set_selected(index == self.selected);
@@ -828,6 +833,15 @@ impl TrainerApp {
                                 egui::vec2(ui.available_width(), 22.0),
                                 egui::Layout::top_down(egui::Align::Center),
                                 |ui| {
+                                    let fill = if checked {
+                                        Color32::from_rgb(31, 107, 87)
+                                    } else {
+                                        Color32::from_rgb(44, 58, 72)
+                                    };
+                                    let visuals = ui.visuals_mut();
+                                    visuals.widgets.inactive.bg_fill = fill;
+                                    visuals.widgets.hovered.bg_fill = fill.gamma_multiply(1.25);
+                                    visuals.widgets.active.bg_fill = fill.gamma_multiply(1.4);
                                     let response = ui.add_enabled(
                                         self.apply.is_none(),
                                         egui::Checkbox::without_text(&mut checked),
@@ -849,7 +863,7 @@ impl TrainerApp {
                             ui.label(target);
                         });
                         row.col(|ui| {
-                            ui.label(RichText::new(status).color(MUTED));
+                            ui.label(RichText::new(status).color(status_color));
                         });
                         if row.response().clicked() {
                             if selected != index {
@@ -1197,7 +1211,7 @@ mod tests {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1010.0, 810.0),
+                egui::vec2(980.0, 810.0),
             )),
             ..Default::default()
         };
@@ -1231,7 +1245,7 @@ mod tests {
         let mut clicked = false;
         let mut frame = |events| {
             let input = RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1010.0, 810.0))),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(980.0, 810.0))),
                 events,
                 ..Default::default()
             };
