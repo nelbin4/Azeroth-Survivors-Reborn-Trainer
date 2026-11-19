@@ -184,6 +184,28 @@ impl RoleProof {
     }
 }
 
+fn read_scan_chunk(memory: &impl Memory, start: usize, bytes: &mut [u8]) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::ERROR_PARTIAL_COPY;
+
+    match memory.read(start, bytes) {
+        Ok(()) => return Ok(()),
+        Err(error) if error.raw_os_error() == Some(ERROR_PARTIAL_COPY as i32) => {}
+        Err(error) => return Err(error),
+    }
+    // Recover every page, including the overlap used for boundary-spanning candidates.
+    const PAGE_SIZE: usize = 4096;
+    for (index, page) in bytes.chunks_mut(PAGE_SIZE).enumerate() {
+        let address = start + index * PAGE_SIZE;
+        if let Err(error) = memory.read(address, page) {
+            if error.raw_os_error() != Some(ERROR_PARTIAL_COPY as i32) {
+                return Err(error);
+            }
+            memory.read(address, page)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role)> {
     let deadline = Instant::now() + Duration::from_secs(40);
     let mut found = None;
@@ -203,7 +225,7 @@ pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role
             }
             let length = buffer.len().min(region.end - start);
             let raw = &mut buffer[..length];
-            reader.read(start, raw).map_err(|error| {
+            read_scan_chunk(reader, start, raw).map_err(|error| {
                 io::Error::other(format!("Session scan was incomplete: {error}"))
             })?;
             for offset in (0..length.saturating_sub(131).min(1024 * 1024)).step_by(8) {
@@ -242,6 +264,40 @@ pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct PartialRead {
+        blocked_page: Option<usize>,
+    }
+
+    impl Memory for PartialRead {
+        fn read(&self, address: usize, bytes: &mut [u8]) -> io::Result<()> {
+            if bytes.len() > 4096 || self.blocked_page == Some(address) {
+                return Err(io::Error::from_raw_os_error(
+                    windows_sys::Win32::Foundation::ERROR_PARTIAL_COPY as i32,
+                ));
+            }
+            bytes.fill(if address == 0x10000 { 1 } else { 2 });
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn partial_chunk_requires_every_page_including_overlap() {
+        let mut bytes = [0; 4096 + 136];
+        read_scan_chunk(&PartialRead { blocked_page: None }, 0x10000, &mut bytes).unwrap();
+        assert!(bytes[..4096].iter().all(|&byte| byte == 1));
+        assert!(bytes[4096..].iter().all(|&byte| byte == 2));
+        assert!(
+            read_scan_chunk(
+                &PartialRead {
+                    blocked_page: Some(0x11000)
+                },
+                0x10000,
+                &mut bytes,
+            )
+            .is_err()
+        );
+    }
 
     struct Fake(Vec<u8>);
 

@@ -99,6 +99,8 @@ pub struct TrainerApp {
     auto_failures: u8,
     role_lease: Option<RoleProof>,
     cached_role: Option<RoleProof>,
+    last_verified_role: Option<crate::session_role::Role>,
+    last_apply_error: Option<String>,
     field_issues: std::collections::BTreeMap<&'static str, String>,
     snapshot: Option<Snapshot>,
     status: String,
@@ -236,6 +238,8 @@ impl TrainerApp {
             auto_failures: 0,
             role_lease: None,
             cached_role: None,
+            last_verified_role: None,
+            last_apply_error: None,
             field_issues: Default::default(),
             snapshot: None,
             status: "Start Reborn to find a character.".into(),
@@ -266,6 +270,8 @@ impl TrainerApp {
             }
             self.session = session;
             self.cached_role = None;
+            self.last_verified_role = None;
+            self.last_apply_error = None;
             self.scan = None;
             self.stop_auto();
             self.snapshot = None;
@@ -424,6 +430,7 @@ impl TrainerApp {
                     }
                     self.role_lease = Some(result.lease);
                     self.cached_role = Some(result.lease);
+                    self.last_verified_role = Some(result.role);
                     self.field_issues = result.skipped;
                     let count = result.applied;
                     let warning = self.field_issues.len();
@@ -446,6 +453,7 @@ impl TrainerApp {
                 }
                 Err(error) => {
                     event("apply.failed", format_args!("{error}"));
+                    self.last_apply_error = Some(error.to_string());
                     self.cached_role = None;
                     self.auto_failures += 1;
                     if self.auto_active
@@ -1025,28 +1033,103 @@ impl TrainerApp {
     }
 
     fn diagnostic_text(&self) -> String {
-        let pid = self
-            .session
-            .as_ref()
-            .map_or_else(|| "Disconnected".into(), |s| format!("PID {}", s.pid));
-        let build = self.snapshot.as_ref().map_or("—", |s| s.build.as_str());
-        let character = self
-            .snapshot
-            .as_ref()
-            .and_then(|s| s.character.as_ref())
-            .map_or_else(
-                || "—".into(),
-                |c| format!("{} · slot {} of {}", c.name, c.index + 1, c.count),
-            );
-        let access = if self.snapshot.as_ref().is_some_and(|s| s.stats.is_some()) {
-            "Verified mapping · Solo or host verification required"
-        } else {
-            "Read-only"
-        };
-        format!(
-            "{}\nGame process: {pid}\nBuild: {build}\nCharacter: {character}\nAccess: {access}",
+        use std::fmt::Write as _;
+
+        let mut report = format!(
+            "Trainer {VERSION} / Windows x64\n\nSESSION\n{}\n",
             self.status
-        )
+        );
+        if let Some(session) = &self.session {
+            let _ = writeln!(
+                report,
+                "Game PID: {}\nGame executable: {}",
+                session.pid,
+                session.path.display()
+            );
+        } else {
+            let _ = writeln!(
+                report,
+                "Game process: {}",
+                if self.running {
+                    "Selection required"
+                } else {
+                    "Disconnected"
+                }
+            );
+        }
+        if let Some(snapshot) = &self.snapshot {
+            let _ = writeln!(
+                report,
+                "Build: {}\nVerified stat layout: {}",
+                snapshot.build,
+                snapshot.stats.is_some()
+            );
+            if let Some(character) = &snapshot.character {
+                let _ = writeln!(
+                    report,
+                    "Character: {} (slot {} of {})",
+                    character.name,
+                    character.index + 1,
+                    character.count
+                );
+            }
+        }
+        let role = self
+            .last_verified_role
+            .map_or("Unavailable", |role| match role {
+                crate::session_role::Role::Solo => "Solo",
+                crate::session_role::Role::Host => "Host",
+                crate::session_role::Role::Guest => "Guest",
+            });
+        let _ = writeln!(
+            report,
+            "Last verified role: {role}\nCached role proof: {}\nFreeze requested: {}\nApply in progress: {}\nConsecutive Apply errors: {}",
+            self.cached_role.is_some(),
+            self.auto_active,
+            self.apply.is_some(),
+            self.auto_failures
+        );
+        if let Some(scan) = &self.scan {
+            let _ = writeln!(
+                report,
+                "Find active: {}s elapsed",
+                scan.started.elapsed().as_secs()
+            );
+        }
+        if let Some(error) = &self.last_apply_error {
+            let _ = writeln!(report, "Last Apply error: {error}");
+        }
+        if let Some(error) = &self.error {
+            let _ = writeln!(report, "Application error: {error}");
+        }
+        let _ = writeln!(report, "\nSTATS");
+        for (index, stat) in STATS.iter().enumerate() {
+            let current = self.stat_display(stat);
+            let enabled = if self.enabled[index] { "on" } else { "off" };
+            let _ = write!(
+                report,
+                "{} | current {} | target {} | enabled {enabled}",
+                stat.label,
+                current.as_deref().unwrap_or("Unavailable"),
+                stat.target(self.targets[index])
+            );
+            if let Some(issue) = self.field_issues.get(stat.key) {
+                let _ = write!(report, " | {issue}");
+            }
+            report.push('\n');
+        }
+        let _ = writeln!(report, "\nUPDATER\n{}", self.update_status);
+        if let Some(error) = &self.update_error {
+            let _ = writeln!(report, "Updater error: {error}");
+        }
+        if let Ok(directory) = crate::settings::state_directory() {
+            let _ = writeln!(
+                report,
+                "\nBACKGROUND LOG\n{}",
+                directory.join("reborn-rust.log").display()
+            );
+        }
+        report
     }
 }
 
@@ -1124,12 +1207,17 @@ impl eframe::App for TrainerApp {
             let text = self.diagnostic_text();
             egui::Window::new("Detection details")
                 .open(&mut self.show_details)
+                .default_width(680.0)
                 .show(context, |ui| {
                     if ui.button("Copy details").clicked() {
                         event("diagnostics.copied", format_args!(""));
                         context.copy_text(text.clone());
                     }
-                    ui.monospace(text);
+                    egui::ScrollArea::vertical()
+                        .max_height(520.0)
+                        .show(ui, |ui| {
+                            ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
+                        });
                 });
         }
     }

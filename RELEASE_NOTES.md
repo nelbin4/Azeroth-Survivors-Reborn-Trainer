@@ -1,5 +1,5 @@
-Azeroth Survivor Reborn Trainer v1.0.3
+Azeroth Survivor Reborn Trainer v1.0.4
 
-- Keep the connection status and update status in compact, right-aligned rows.
-- Restore the visible Find controls and keep the footer clear of the stats table.
-- Keep the stats table columns at fixed widths.
+- Recover from Windows partial memory reads during the session scan by retrying in smaller chunks.
+- Recognize the verified game image after PE timestamp or checksum changes and retain live stat and session checks.
+- Expand Advanced into a copyable report with build, process, session, stat targets, errors, and the background log path.

@@ -5,6 +5,27 @@ use sha2::{Digest, Sha256};
 use crate::{process::Reader, stats_ui::STATS};
 
 pub const BUILD: &str = "ab1d6c071b56644d0790a78b73b8c61904d0711836161c19ccd07928fb73b765";
+const VERIFIED_FILE_SIZE: usize = 210_348_032;
+const VERIFIED_NORMALIZED: &str =
+    "480c595a25b17ebdcc4d1a2e244278e9e5c1b742b7ed025cb94d6f0dbe2286ea";
+
+pub fn matches_verified_image(bytes: &[u8], digest: &str) -> bool {
+    digest == BUILD
+        || (bytes.len() == VERIFIED_FILE_SIZE
+            && format!("{:x}", normalized_digest(bytes)) == VERIFIED_NORMALIZED)
+}
+
+fn normalized_digest(bytes: &[u8]) -> impl std::fmt::LowerHex {
+    // Exclude only the PE timestamp and checksum at this profile's header offsets.
+    let mut hash = Sha256::new();
+    hash.update(&bytes[..288]);
+    hash.update([0u8; 4]);
+    hash.update(&bytes[292..368]);
+    hash.update([0u8; 4]);
+    hash.update(&bytes[372..]);
+    hash.finalize()
+}
+
 const COMMON: &[Guard] = &[
     (
         0x6077b10,
@@ -280,6 +301,17 @@ impl Field {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalization_ignores_only_pe_metadata() {
+        let mut bytes = [0; 400];
+        let original = format!("{:x}", normalized_digest(&bytes));
+        bytes[288..292].fill(1);
+        bytes[368..372].fill(2);
+        assert_eq!(format!("{:x}", normalized_digest(&bytes)), original);
+        bytes[372] = 3;
+        assert_ne!(format!("{:x}", normalized_digest(&bytes)), original);
+    }
 
     #[test]
     fn writes_display_targets_in_native_units() {

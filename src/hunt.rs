@@ -22,7 +22,7 @@ type Guard = (usize, Vec<u8>);
 #[derive(Clone, Debug)]
 struct Plan {
     build: String,
-    digest: String,
+    verified_image: bool,
     array: Array,
     name: usize,
     stats: usize,
@@ -331,7 +331,7 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
     let digest = format!("{:x}", Sha256::digest(blob));
     Ok(Plan {
         build: digest[..12].into(),
-        digest,
+        verified_image: stat_fields::matches_verified_image(blob, &digest),
         array,
         name: *name,
         stats,
@@ -642,7 +642,7 @@ pub struct ApplyOutcome {
 }
 
 fn supported(plan: &Plan) -> bool {
-    plan.digest == stat_fields::BUILD
+    plan.verified_image
         && plan.array == [4768, 3520, 3512, 6800]
         && plan.name == 4880
         && plan.stats == 6520
@@ -865,10 +865,10 @@ mod tests {
     }
 
     #[test]
-    fn damage_mapping_requires_the_full_build_digest_and_matching_layout() {
+    fn stat_mapping_requires_a_verified_image_and_matching_layout() {
         let mut plan = Plan {
             build: stat_fields::BUILD[..12].into(),
-            digest: stat_fields::BUILD.into(),
+            verified_image: true,
             array: [4768, 3520, 3512, 6800],
             name: 4880,
             stats: 6520,
@@ -878,7 +878,7 @@ mod tests {
         plan.stats += 4;
         assert!(!supported(&plan));
         plan.stats -= 4;
-        plan.digest.pop();
+        plan.verified_image = false;
         assert!(!supported(&plan));
     }
 

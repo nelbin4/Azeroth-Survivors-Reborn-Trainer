@@ -10,15 +10,27 @@ written in Rust. [Download the latest standalone EXE](https://github.com/nelbin4
 3. Start a solo run or host a co-op run, then click **Find**. The trainer applies and holds the enabled targets after verifying the selected character and session.
 4. Use **Stop Freeze** to stop automatic writes. **Apply** sets the selected target once.
 
-The Rust stat mappings currently support game build `ab1d6c071b56`. Unverified
-builds and co-op guests have read-only diagnostics. Current health follows
-verified maximum health. Echo requires the active Echo effect. During a temporary
-verification failure, freezes pause and the trainer retries the session check.
-If the selected character or lobby authority changes, click **Find** again in
-a verified solo or host session.
+### Game updates and session checks
 
-**Advanced → Detection details** shows the detected game and character. The
-trainer logs session checks, searches, and stat changes to
+**Find** looks for your character on newer builds. Stat writes use the verified
+layout from build `ab1d6c071b56`. A different executable fingerprint can use
+that layout if every byte apart from the PE timestamp and checksum matches and
+the live checks pass. Changes to game code or data require a verified mapping.
+Stat writes require a verified solo or co-op host session.
+
+The first role check scans memory to locate the live lobby. Repeat hunts in the
+same process can revalidate the cached proof. If Windows reports a partial read
+(error 299), the scanner retries page by page. If a page remains unreadable,
+freezes pause and session verification retries. Click **Find** again if the
+selected character or lobby role changes.
+
+Current health follows verified maximum health. Echo requires the active Echo effect.
+
+### Troubleshooting
+
+Open **Advanced → Detection details** and click **Copy details** to copy the game
+build, process, session state, last Apply error, and per-stat readings and targets.
+The background log includes search, session check, update, and stat events at
 `%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-rust.log`.
 At 4 MiB the log rotates to `reborn-rust.previous.log`. If settings are malformed,
 the trainer preserves the original and loads defaults so changes can still be saved.
