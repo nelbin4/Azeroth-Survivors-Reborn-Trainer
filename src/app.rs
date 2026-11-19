@@ -113,13 +113,13 @@ pub struct TrainerApp {
     install_result: Option<Receiver<io::Result<()>>>,
 }
 
-fn footer_button_row(ui: &mut egui::Ui) -> egui::Rect {
+fn update_button_row(ui: &mut egui::Ui, buttons: impl FnOnce(&mut egui::Ui)) {
     let height = ui.spacing().interact_size.y + ui.spacing().button_padding.y * 2.0;
-    ui.allocate_exact_size(
+    ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), height),
-        egui::Sense::hover(),
-    )
-    .0
+        egui::Layout::right_to_left(egui::Align::Center),
+        buttons,
+    );
 }
 
 fn checked_targets(enabled: &[bool; 17], targets: &[u32; 17]) -> hunt::Targets {
@@ -605,12 +605,8 @@ impl TrainerApp {
     }
 
     fn footer(&mut self, context: &egui::Context, ui: &mut egui::Ui) {
-        let row = footer_button_row(ui);
-        ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(row)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-            |ui| {
+        ui.columns(2, |columns| {
+            columns[0].horizontal(|ui| {
                 if ui
                     .add_enabled(
                         !self.running
@@ -646,13 +642,9 @@ impl TrainerApp {
                     event("diagnostics.opened", format_args!(""));
                     self.show_details = true;
                 }
-            },
-        );
-        ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(row)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-            |ui| {
+            });
+            let ui = &mut columns[1];
+            update_button_row(ui, |ui| {
                 let latest = self
                     .using_latest_until
                     .is_some_and(|until| Instant::now() < until);
@@ -683,33 +675,34 @@ impl TrainerApp {
                 if ui.button("Github Page").clicked() {
                     context.open_url(egui::OpenUrl::new_tab(update::PROJECT));
                 }
-            },
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut status = RichText::new(format!("{VERSION} - {}", self.update_status)).small();
-            if self.update_status == "Update Available" {
-                let seconds = context.input(|input| input.time);
-                let glow = ((seconds * std::f64::consts::TAU / 5.0).cos() + 1.0) * 0.5;
-                status = status
-                    .color(Color32::from_rgb(
-                        255,
-                        200 + (45.0 * glow) as u8,
-                        35 + (105.0 * glow) as u8,
-                    ))
-                    .background_color(Color32::from_rgba_unmultiplied(
-                        255,
-                        215,
-                        65,
-                        (28.0 * glow) as u8,
-                    ));
-                context.request_repaint_after(Duration::from_millis(50));
-            } else {
-                status = status.color(MINT);
-            }
-            let response = ui.label(status);
-            if let Some(error) = &self.update_error {
-                response.on_hover_text(error);
-            }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut status =
+                    RichText::new(format!("{VERSION} - {}", self.update_status)).small();
+                if self.update_status == "Update Available" {
+                    let seconds = context.input(|input| input.time);
+                    let glow = ((seconds * std::f64::consts::TAU / 5.0).cos() + 1.0) * 0.5;
+                    status = status
+                        .color(Color32::from_rgb(
+                            255,
+                            200 + (45.0 * glow) as u8,
+                            35 + (105.0 * glow) as u8,
+                        ))
+                        .background_color(Color32::from_rgba_unmultiplied(
+                            255,
+                            215,
+                            65,
+                            (28.0 * glow) as u8,
+                        ));
+                    context.request_repaint_after(Duration::from_millis(50));
+                } else {
+                    status = status.color(MINT);
+                }
+                let response = ui.label(status);
+                if let Some(error) = &self.update_error {
+                    response.on_hover_text(error);
+                }
+            });
         });
     }
 
@@ -1105,7 +1098,7 @@ mod tests {
     }
     #[test]
     fn footer_update_button_receives_pointer_clicks() {
-        use egui::{Align, Event, Layout, PointerButton, Pos2, RawInput, Rect, UiBuilder, vec2};
+        use egui::{Align, Event, Layout, PointerButton, Pos2, RawInput, Rect, vec2};
         let context = egui::Context::default();
         let mut position = Pos2::ZERO;
         let mut clicked = false;
@@ -1117,19 +1110,16 @@ mod tests {
             };
             let _ = context.run(input, |ctx| {
                 egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
-                    let row = footer_button_row(ui);
-                    ui.scope_builder(
-                        UiBuilder::new()
-                            .max_rect(row)
-                            .layout(Layout::right_to_left(Align::Center)),
-                        |ui| {
+                    ui.columns(2, |columns| {
+                        columns[0].label("Game");
+                        update_button_row(&mut columns[1], |ui| {
                             let response = ui.button("Check updates");
                             position = response.rect.center();
                             clicked |= response.clicked();
-                        },
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label("1.0.0 - Latest");
+                        });
+                        columns[1].with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label("1.0.0 - Latest");
+                        });
                     });
                 });
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -1138,6 +1128,8 @@ mod tests {
             });
             position
         };
+        frame(vec![]);
+        frame(vec![]);
         let center = frame(vec![]);
         frame(vec![Event::PointerMoved(center)]);
         for pressed in [true, false] {
