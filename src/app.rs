@@ -74,6 +74,17 @@ impl Drop for Search {
     }
 }
 
+struct Apply {
+    stop: Arc<AtomicBool>,
+    result: Receiver<io::Result<u32>>,
+}
+
+impl Drop for Apply {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
+
 pub struct TrainerApp {
     settings: Settings,
     session: Option<Session>,
@@ -84,6 +95,8 @@ pub struct TrainerApp {
     next_process_check: Instant,
     running: bool,
     scan: Option<Search>,
+    apply: Option<Apply>,
+    damage_target: String,
     snapshot: Option<Snapshot>,
     status: String,
     error: Option<String>,
@@ -177,6 +190,8 @@ impl TrainerApp {
             next_process_check: Instant::now(),
             running: false,
             scan: None,
+            apply: None,
+            damage_target: String::new(),
             snapshot: None,
             status: "Start Reborn to find a character.".into(),
             show_details: false,
@@ -201,6 +216,7 @@ impl TrainerApp {
             }
             self.session = session;
             self.scan = None;
+            self.apply = None;
             self.snapshot = None;
             self.status = if self.session.is_some() {
                 "Start a run, then click Find.".into()
@@ -303,7 +319,10 @@ impl TrainerApp {
                                 search.started.elapsed().as_millis()
                             ),
                         );
-                        self.status = if snapshot.character.is_some() {
+                        self.status = if let Some(damage) = &snapshot.damage {
+                            self.damage_target = damage.current.to_string();
+                            "Character found. Damage bonus Apply requires a solo run.".into()
+                        } else if snapshot.character.is_some() {
                             "Character found. Diagnostic readings only.".into()
                         } else {
                             "No live character verified. Start a run and retry.".into()
@@ -321,6 +340,31 @@ impl TrainerApp {
                         );
                         self.status = error.to_string();
                     }
+                }
+            }
+        }
+        if let Some(outcome) = self
+            .apply
+            .as_ref()
+            .and_then(|apply| match apply.result.try_recv() {
+                Ok(result) => Some(result),
+                Err(TryRecvError::Disconnected) => {
+                    Some(Err(io::Error::other("Apply worker stopped unexpectedly.")))
+                }
+                Err(TryRecvError::Empty) => None,
+            })
+        {
+            self.apply = None;
+            match outcome {
+                Ok(value) => {
+                    if let Some(damage) = self.snapshot.as_mut().and_then(|s| s.damage.as_mut()) {
+                        damage.current = value;
+                    }
+                    self.status = format!("Damage bonus applied and verified at {value}%.");
+                }
+                Err(error) => {
+                    event("apply.failed", format_args!("{error}"));
+                    self.status = error.to_string();
                 }
             }
         }
@@ -356,6 +400,23 @@ impl TrainerApp {
                 result,
             });
         }
+    }
+
+    fn apply_damage(&mut self, context: &egui::Context) {
+        let Some(proof) = self.snapshot.as_ref().and_then(|s| s.damage.clone()) else {
+            return;
+        };
+        let Ok(target) = self.damage_target.trim().parse::<u32>() else {
+            self.status = "Enter a whole number from 0 to 9,999.".into();
+            return;
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        self.status = "Checking the solo session before Apply…".into();
+        let result = task(context, move || {
+            hunt::apply_damage(&proof, target, &worker_stop)
+        });
+        self.apply = Some(Apply { stop, result });
     }
 
     fn locate(&mut self) -> Option<PathBuf> {
@@ -406,7 +467,7 @@ impl TrainerApp {
             }
             if ui
                 .add_enabled(
-                    self.session.is_some() && self.stop_result.is_none(),
+                    self.session.is_some() && self.stop_result.is_none() && self.apply.is_none(),
                     Button::new("Stop Game"),
                 )
                 .clicked()
@@ -493,6 +554,10 @@ impl TrainerApp {
     }
 
     fn stat_display(&self, stat: &Stat) -> Option<String> {
+        if stat.key == "damage" {
+            let damage = self.snapshot.as_ref()?.damage.as_ref()?;
+            return Some(format!("{}%", grouped(u64::from(damage.current))));
+        }
         let character = self.snapshot.as_ref()?.character.as_ref()?;
         let index = match stat.key {
             "health" => 0,
@@ -533,14 +598,15 @@ impl TrainerApp {
                 let target = stat.target(self.settings.stat_preferences());
                 let mut checked = stat.checked(self.settings.stat_preferences());
                 let current = self.stat_display(stat);
-                let status = if current.is_some() { "Diagnostic" }
+                let status = if current.is_some() && stat.key == "damage" { "Verified" }
+                    else if current.is_some() { "Diagnostic" }
                     else if self.scan.is_some() { "Searching" } else { "Not found" };
                 body.row(29.0, |mut row| {
                     row.set_selected(index == self.selected);
                     row.col(|ui| {
                         ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 22.0), egui::Layout::top_down(egui::Align::Center), |ui| {
                             ui.add_enabled(false, egui::Checkbox::without_text(&mut checked))
-                                .on_disabled_hover_text("Saved freeze preference. Writes are disabled in this preview.");
+                                .on_disabled_hover_text("Saved freeze preference. Freezing is disabled in this preview.");
                         });
                     });
                     row.col(|ui| { ui.label(stat.label); });
@@ -586,7 +652,10 @@ impl TrainerApp {
             .fill(ACCENT)
             .min_size(egui::vec2(width, 53.0));
         if ui
-            .add_enabled(finding || self.session.is_some(), find)
+            .add_enabled(
+                self.apply.is_none() && (finding || self.session.is_some()),
+                find,
+            )
             .clicked()
         {
             if finding {
@@ -601,7 +670,7 @@ impl TrainerApp {
             false,
             Button::new("Stop Freeze").min_size(egui::vec2(width, 32.0)),
         )
-        .on_disabled_hover_text("Stat writes are disabled in 0.9.9b.");
+        .on_disabled_hover_text("Freezing is disabled in 0.9.9b.");
         self.search_progress(ui);
         ui.colored_label(MINT, &self.status);
         if let Some(scan) = &self.scan {
@@ -620,20 +689,45 @@ impl TrainerApp {
                 .color(MINT),
         );
         ui.label(if stat.percent { "Target (%)" } else { "Target" });
-        let mut target = stat.target(self.settings.stat_preferences());
-        ui.add_enabled(
-            false,
-            egui::TextEdit::singleline(&mut target).desired_width(width - 10.0),
-        );
+        let damage_selected = stat.key == "damage" && current.is_some();
+        let can_apply = damage_selected
+            && self.apply.is_none()
+            && self.stop_result.is_none()
+            && self.session.is_some()
+            && self.scan.is_none();
+        if damage_selected {
+            ui.add_enabled(
+                can_apply,
+                egui::TextEdit::singleline(&mut self.damage_target).desired_width(width - 10.0),
+            );
+        } else {
+            let mut target = stat.target(self.settings.stat_preferences());
+            ui.add_enabled(
+                false,
+                egui::TextEdit::singleline(&mut target).desired_width(width - 10.0),
+            );
+        }
         ui.horizontal(|ui| {
-            ui.add_enabled(false, Button::new("Apply").fill(ACCENT));
-            ui.add_enabled(false, Button::new("Use maximum"));
+            if ui
+                .add_enabled(can_apply, Button::new("Apply").fill(ACCENT))
+                .clicked()
+            {
+                self.apply_damage(context);
+            }
+            if ui
+                .add_enabled(can_apply, Button::new("Use maximum"))
+                .clicked()
+            {
+                self.damage_target = stat.max.to_string();
+            }
         });
         ui.label(
-            RichText::new(if current.is_some() {
-                "Approximate reading. Stat writes are disabled in this preview."
+            RichText::new(if damage_selected {
+                "One-time Apply in a verified solo run."
+            } else if current.is_some() {
+                "Approximate reading."
             } else {
-                "This preview is read-only."
+                "Apply is available only for verified Damage bonus."
             })
             .color(MUTED),
         );
@@ -653,8 +747,13 @@ impl TrainerApp {
                 || "—".into(),
                 |c| format!("{} · slot {} of {}", c.name, c.index + 1, c.count),
             );
+        let access = if self.snapshot.as_ref().is_some_and(|s| s.damage.is_some()) {
+            "Damage bonus Apply · Solo verification required"
+        } else {
+            "Read-only"
+        };
         format!(
-            "{}\nGame process: {pid}\nBuild: {build}\nCharacter: {character}\nAccess: Read-only",
+            "{}\nGame process: {pid}\nBuild: {build}\nCharacter: {character}\nAccess: {access}",
             self.status
         )
     }

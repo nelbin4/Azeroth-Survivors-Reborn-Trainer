@@ -1,4 +1,4 @@
-//! Read-only first port of the array and identity discovery paths.
+//! Discover the selected character and prepare independently verified fields.
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
@@ -11,15 +11,17 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     diagnostic_log::event,
-    process::{Reader, Session},
+    process::{DamageWriter, Reader, Session},
+    session_role::{self, Role},
 };
 
 type Array = [usize; 4]; // selected index, count, vector pointer, stride
 type Guard = (usize, Vec<u8>);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Plan {
     build: String,
+    digest: String,
     array: Array,
     name: usize,
     stats: usize,
@@ -30,6 +32,7 @@ struct Plan {
 pub struct Snapshot {
     pub build: String,
     pub character: Option<Character>,
+    pub damage: Option<VerifiedDamage>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -38,6 +41,8 @@ pub struct Character {
     pub count: usize,
     pub index: usize,
     pub health_candidate: [usize; 2],
+    game: usize,
+    identity: usize,
 }
 
 fn machine_word(raw: &[u8], offset: usize) -> Option<usize> {
@@ -316,8 +321,10 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
         .chain(check.iter().cloned())
         .chain(drop.iter().cloned())
         .collect();
+    let digest = format!("{:x}", Sha256::digest(blob));
     Ok(Plan {
-        build: format!("{:x}", Sha256::digest(blob))[..12].into(),
+        build: digest[..12].into(),
+        digest,
         array: *array,
         name: *name,
         stats: *stats,
@@ -353,7 +360,8 @@ fn snapshot(
     let hero = pointer.checked_add(selected * stride)?;
     let mut raw = vec![0; stride];
     reader.read(hero, &mut raw).ok()?;
-    if machine_word(&raw, 0xF0)? == 0
+    let identity = machine_word(&raw, 0xF0)?;
+    if identity == 0
         || (0..16).any(|i| scalar(&raw, plan.stats + 4 * i, 4).is_none_or(|n| n > 1_000_000))
     {
         return None;
@@ -401,6 +409,8 @@ fn snapshot(
                 count,
                 index: selected,
                 health_candidate,
+                game,
+                identity,
             },
         ))
 }
@@ -555,10 +565,214 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
             found.len()
         ),
     );
+    let found = found.into_iter().next();
+    let damage = found.as_ref().and_then(|(address, character)| {
+        prepare_damage(&reader, session, base, &plan, *address, character)
+    });
     Ok(Snapshot {
         build: plan.build,
-        character: found.into_values().next(),
+        character: found.map(|(_, character)| character),
+        damage,
     })
+}
+
+const DAMAGE_MAX: u32 = 9_999;
+// First Rust write preview. This fingerprint and these loaded-code proofs were
+// independently identified by the verified v0.9.19 named-stat mapper.
+const DAMAGE_BUILD: &str = "ab1d6c071b56644d0790a78b73b8c61904d0711836161c19ccd07928fb73b765";
+const DAMAGE_GUARDS: &[(usize, usize, &str)] = &[
+    (
+        0x733f87f,
+        3121,
+        "596d3667a64f82718a1d9e38a12ae46588259d0f02e086de5633c89a425b75f2",
+    ),
+    (
+        0xad8f2cf,
+        180,
+        "74fcd67203f838e514c3caa6496f3013622916331f6610587c92f822080753ba",
+    ),
+    (
+        0x7e65ce0,
+        68,
+        "b24097390346e6a1157d258615a98664327a63b749e11cd25eb15da7e81f2740",
+    ),
+    (
+        0x82fdd80,
+        4,
+        "2238f30df488055daf5e8f362cf904e370011a172d20df193c1b7ae8e5db8e01",
+    ),
+    (
+        0x6077b10,
+        15,
+        "996c7a23d204142f6dac72c8e5de8d4c19800c34cdc291e5f8d70e40a6b25c21",
+    ),
+    (
+        0x6078a30,
+        18,
+        "b816c681e97d089470f390291295f2c7a10be046fc956add12ac74e595dad0bd",
+    ),
+];
+
+#[derive(Clone, Debug)]
+pub struct VerifiedDamage {
+    session: Session,
+    plan: Plan,
+    hero: usize,
+    game: usize,
+    identity: usize,
+    name: String,
+    pub current: u32,
+}
+
+fn damage_profile(plan: &Plan) -> Option<usize> {
+    (plan.digest == DAMAGE_BUILD
+        && plan.array == [4768, 3520, 3512, 6800]
+        && plan.name == 4880
+        && plan.stats == 6520)
+        .then_some(6528)
+}
+
+fn verify_damage_code(reader: &Reader, base: usize) -> io::Result<()> {
+    for &(rva, len, expected) in DAMAGE_GUARDS {
+        let mut bytes = vec![0; len];
+        reader.read(base + rva, &mut bytes)?;
+        if format!("{:x}", Sha256::digest(&bytes)) != expected {
+            return Err(io::Error::other(
+                "Loaded Damage bonus code failed verification.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn read_damage(reader: &Reader, address: usize) -> io::Result<u32> {
+    let mut raw = [0; 4];
+    reader.read(address, &mut raw)?;
+    Ok(u32::from_le_bytes(raw))
+}
+
+fn prepare_damage(
+    reader: &Reader,
+    session: &Session,
+    base: usize,
+    plan: &Plan,
+    hero: usize,
+    character: &Character,
+) -> Option<VerifiedDamage> {
+    let offset = damage_profile(plan)?;
+    if character.count != 1 {
+        return None;
+    }
+    verify_damage_code(reader, base).ok()?;
+    let current = read_damage(reader, hero.checked_add(offset)?).ok()?;
+    event(
+        "apply.damage_ready",
+        format_args!("game_pid={} current={current}", session.pid),
+    );
+    Some(VerifiedDamage {
+        session: session.clone(),
+        plan: plan.clone(),
+        hero,
+        game: character.game,
+        identity: character.identity,
+        name: character.name.clone(),
+        current,
+    })
+}
+
+pub fn apply_damage(proof: &VerifiedDamage, target: u32, cancel: &AtomicBool) -> io::Result<u32> {
+    if target > DAMAGE_MAX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Enter a whole number from 0 to 9,999.",
+        ));
+    }
+    let offset = damage_profile(&proof.plan)
+        .ok_or_else(|| io::Error::other("This build has no verified Rust Damage bonus mapping."))?;
+    event(
+        "apply.started",
+        format_args!("game_pid={} target={target}", proof.session.pid),
+    );
+    let reader = Reader::open(&proof.session)?;
+    let (role_proof, role) = session_role::find(&reader, cancel)?;
+    if role != Role::Solo {
+        return Err(io::Error::other(
+            "Apply is supported only in verified solo runs.",
+        ));
+    }
+    let image = fs::read(&proof.session.path)?;
+    if format!("{:x}", Sha256::digest(&image)) != DAMAGE_BUILD {
+        return Err(io::Error::other(
+            "Game executable changed. Click Find again.",
+        ));
+    }
+    drop(image);
+    let base = reader.module_base(&proof.session)?;
+    cancelled(cancel)?;
+    let writer = DamageWriter::open(&proof.session)?;
+    verify_damage_code(&reader, base)?;
+    for (rva, expected) in &proof.plan.guards {
+        let mut bytes = vec![0; expected.len()];
+        reader.read(base + rva, &mut bytes)?;
+        if bytes != *expected {
+            return Err(io::Error::other(
+                "Player identity code changed. Click Find again.",
+            ));
+        }
+    }
+    let mut header = [0; 24];
+    reader.read(proof.game + proof.plan.array[2] - 8, &mut header)?;
+    let current = snapshot(&reader, &proof.plan, proof.game, &header);
+    let same_player = current.is_some_and(|(address, character)| {
+        address == proof.hero
+            && character.identity == proof.identity
+            && character.name == proof.name
+            && character.count == 1
+            && character.index == 0
+    });
+    if !same_player {
+        return Err(io::Error::other(
+            "Selected character changed. Click Find again.",
+        ));
+    }
+    let address = proof.hero + offset;
+    let previous = read_damage(&reader, address)?;
+    if role_proof.read(&reader)? != Role::Solo {
+        return Err(io::Error::other("Session changed before Apply."));
+    }
+    cancelled(cancel)?;
+    if previous != target {
+        let mut current_header = [0; 24];
+        reader.read(proof.game + proof.plan.array[2] - 8, &mut current_header)?;
+        let mut current_id = [0; 8];
+        let mut index = [0; 8];
+        reader.read(proof.hero + 0xF0, &mut current_id)?;
+        reader.read(proof.game + proof.plan.array[0], &mut index)?;
+        if current_header != header
+            || usize::from_le_bytes(current_id) != proof.identity
+            || index != [0; 8]
+            || read_damage(&reader, address)? != previous
+        {
+            return Err(io::Error::other(
+                "The character or stat changed during Apply. Try again.",
+            ));
+        }
+        writer.write_value(address, target)?;
+    }
+    let value = read_damage(&reader, address)?;
+    if value != target {
+        return Err(io::Error::other(
+            "Damage bonus did not match the requested value after Apply.",
+        ));
+    }
+    event(
+        "apply.verified",
+        format_args!(
+            "game_pid={} previous={previous} current={value}",
+            proof.session.pid
+        ),
+    );
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -576,6 +790,24 @@ mod tests {
             cancelled(&AtomicBool::new(true)).unwrap_err().kind(),
             io::ErrorKind::Interrupted
         );
+    }
+
+    #[test]
+    fn damage_mapping_requires_the_full_build_digest_and_matching_layout() {
+        let mut plan = Plan {
+            build: DAMAGE_BUILD[..12].into(),
+            digest: DAMAGE_BUILD.into(),
+            array: [4768, 3520, 3512, 6800],
+            name: 4880,
+            stats: 6520,
+            guards: vec![],
+        };
+        assert_eq!(damage_profile(&plan), Some(6528));
+        plan.stats += 4;
+        assert!(damage_profile(&plan).is_none());
+        plan.stats -= 4;
+        plan.digest.pop();
+        assert!(damage_profile(&plan).is_none());
     }
 
     #[test]

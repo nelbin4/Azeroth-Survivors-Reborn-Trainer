@@ -301,6 +301,44 @@ impl Reader {
         Ok(stacks)
     }
 
+    pub fn private_regions(&self) -> Vec<std::ops::Range<usize>> {
+        use windows_sys::Win32::System::Memory::{
+            MEM_COMMIT, MEM_PRIVATE, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS,
+            VirtualQueryEx,
+        };
+        let mut address = 0x10000usize;
+        let mut regions = Vec::new();
+        while address < 0x7fff_ffff_f000 {
+            let mut info = MEMORY_BASIC_INFORMATION::default();
+            if unsafe {
+                VirtualQueryEx(
+                    self.0.0,
+                    address as _,
+                    &mut info,
+                    std::mem::size_of_val(&info),
+                )
+            } == 0
+            {
+                break;
+            }
+            let start = info.BaseAddress as usize;
+            let Some(end) = start.checked_add(info.RegionSize) else {
+                break;
+            };
+            if end <= address {
+                break;
+            }
+            if info.State == MEM_COMMIT
+                && info.Type == MEM_PRIVATE
+                && info.Protect & (PAGE_GUARD | PAGE_NOACCESS) == 0
+            {
+                regions.push(start.max(address)..end);
+            }
+            address = end;
+        }
+        regions
+    }
+
     fn stack(&self, pid: u32, tid: u32) -> Option<std::ops::Range<usize>> {
         let thread = Handle::new(unsafe { OpenThread(THREAD_QUERY_INFORMATION, 0, tid) }).ok()?;
         let mut info = ThreadInfo::default();
@@ -322,6 +360,85 @@ impl Reader {
         let bottom = usize::from_le_bytes(raw[8..].try_into().ok()?);
         let length = top.checked_sub(bottom)?;
         (length > 0 && length <= 16 * 1024 * 1024).then_some(bottom..top)
+    }
+}
+
+/// Holds the same process-scoped mutex name as the Python trainer.
+pub struct DamageWriter {
+    process: Handle,
+    _lock: Handle,
+}
+
+impl DamageWriter {
+    pub fn open(session: &Session) -> io::Result<Self> {
+        use sha2::{Digest, Sha256};
+        use windows_sys::Win32::{
+            Foundation::{ERROR_ALREADY_EXISTS, GetLastError, SetLastError},
+            System::Threading::{CreateMutexW, PROCESS_VM_OPERATION, PROCESS_VM_WRITE},
+        };
+        let epoch = session
+            .created
+            .checked_sub(116_444_736_000_000_000)
+            .ok_or_else(|| io::Error::other("Invalid process creation time."))?;
+        let unix_seconds = epoch as f64 / 10_000_000.0;
+        let identity_key = format!("{}_{unix_seconds:?}", session.pid);
+        let digest = format!("{:x}", Sha256::digest(identity_key.as_bytes()));
+        let name: Vec<_> = format!("Local\\RebornTrainer_{}", &digest[..24])
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        let (mutex, status) = unsafe {
+            SetLastError(0);
+            let mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+            (mutex, GetLastError())
+        };
+        let lock = Handle::new(mutex)?;
+        if status == ERROR_ALREADY_EXISTS {
+            return Err(io::Error::other(
+                "Another trainer is already controlling Reborn.",
+            ));
+        }
+        let process = Handle::new(unsafe {
+            OpenProcess(
+                PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE,
+                0,
+                session.pid,
+            )
+        })?;
+        if identity(session.pid, &process)? != *session {
+            return Err(io::Error::other("Reborn process identity changed."));
+        }
+        Ok(Self {
+            process,
+            _lock: lock,
+        })
+    }
+
+    pub(crate) fn write_value(&self, address: usize, value: u32) -> io::Result<()> {
+        use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+
+        let value = value.to_le_bytes();
+        let mut written = 0;
+        // The caller has revalidated this single mapped field and session.
+        let ok = unsafe {
+            WriteProcessMemory(
+                self.process.0,
+                address as _,
+                value.as_ptr().cast(),
+                value.len(),
+                &mut written,
+            )
+        };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else if written != value.len() {
+            Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "Incomplete damage write.",
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -361,5 +478,29 @@ mod tests {
         };
         assert!(games.running());
         assert!(games.select(None, None).is_none());
+    }
+
+    #[test]
+    fn writer_uses_one_process_lock_and_writes_exactly_four_bytes() {
+        use std::cell::UnsafeCell;
+
+        let pid = std::process::id();
+        let handle =
+            Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) }).unwrap();
+        let session = identity(pid, &handle).unwrap();
+        let writer = DamageWriter::open(&session).unwrap();
+        assert!(DamageWriter::open(&session).is_err());
+        let values = UnsafeCell::new([17u32, 12]);
+        let address = values.get() as usize;
+        writer.write_value(address, 18).unwrap();
+        let mut bytes = [0; 8];
+        Reader::open(&session)
+            .unwrap()
+            .read(address, &mut bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()), 18);
+        assert_eq!(u32::from_le_bytes(bytes[4..].try_into().unwrap()), 12);
+        drop(writer);
+        assert!(DamageWriter::open(&session).is_ok());
     }
 }
