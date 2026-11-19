@@ -51,23 +51,31 @@ impl Stat {
             )
     }
 
-    pub fn target(&self, prefs: Option<&Value>) -> String {
-        if self.key == "health" {
-            return "Full".into();
-        }
-        let manual = prefs
+    pub fn saved_target(&self, prefs: Option<&Value>) -> u32 {
+        prefs
             .and_then(|data| data.get("targets"))
             .and_then(|targets| targets.get(self.key))
             .and_then(Value::as_u64)
-            .filter(|value| (u64::from(self.min)..=u64::from(self.max)).contains(value));
-        let target = if self.checked(prefs) {
-            u64::from(self.max)
-        } else {
-            manual.unwrap_or(u64::from(self.max))
-        };
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| self.valid_target(*value))
+            .unwrap_or(self.max)
+    }
+
+    pub fn valid_target(&self, target: u32) -> bool {
+        (self.min..=self.max).contains(&target)
+    }
+
+    pub fn target(&self, value: u32) -> String {
+        if self.key == "health" {
+            return "Full".into();
+        }
         let prefix = if self.key == "max_health" { "≥ " } else { "" };
+        format!("{prefix}{}", self.display(u64::from(value)))
+    }
+
+    pub fn display(&self, value: u64) -> String {
         let unit = if self.percent { "%" } else { "" };
-        format!("{prefix}{}{unit}", grouped(target))
+        format!("{}{unit}", grouped(value))
     }
 }
 
@@ -89,15 +97,27 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn renders_saved_targets_and_keeps_checked_stats_at_maximum() {
+    fn uses_saved_targets_even_for_checked_stats() {
         let prefs =
             json!({"enabled": ["damage"], "targets": {"damage": 700, "crit": 42, "rerolls": -1}});
         let stat = |key| STATS.iter().find(|stat| stat.key == key).unwrap();
-        assert_eq!(stat("damage").target(Some(&prefs)), "9,999%");
-        assert_eq!(stat("crit").target(Some(&prefs)), "42%");
-        assert_eq!(stat("rerolls").target(Some(&prefs)), "9,999");
-        assert_eq!(stat("health").target(Some(&prefs)), "Full");
-        assert_eq!(stat("max_health").target(None), "≥ 1,000,000");
+        assert_eq!(
+            stat("damage").target(stat("damage").saved_target(Some(&prefs))),
+            "700%"
+        );
+        assert_eq!(
+            stat("crit").target(stat("crit").saved_target(Some(&prefs))),
+            "42%"
+        );
+        assert_eq!(
+            stat("rerolls").target(stat("rerolls").saved_target(Some(&prefs))),
+            "9,999"
+        );
+        assert_eq!(stat("health").target(0), "Full");
+        assert_eq!(
+            stat("max_health").target(stat("max_health").saved_target(None)),
+            "≥ 1,000,000"
+        );
         assert!(stat("cooldown").checked(None));
         assert!(!stat("cooldown").checked(Some(&prefs)));
     }

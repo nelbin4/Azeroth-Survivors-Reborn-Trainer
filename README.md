@@ -9,11 +9,13 @@ verified co-op host sessions.
 The `codex/rust-migration` branch contains the Rust source for **0.9.9b**.
 GitHub Actions builds the test EXE. Download **Reborn-Rust-0.9.9b-Windows-x64**
 from a successful [Rust preview run](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/actions/workflows/rust-preview.yml),
-extract the Actions archive, and launch the EXE. For game build
-`ab1d6c071b56`, this preview supports a one-time **Damage bonus** Apply in
-a verified solo run. Find still provides diagnostic readings on other builds.
-Co-op and other stats stay read-only in the Rust preview. The stable release
-instructions below apply to the Python trainer.
+extract the Actions archive, and launch the EXE. On game build
+`ab1d6c071b56`, **Find** applies and holds your checked targets in a
+verified solo or co-op host session. **Stop Freeze** stops automatic writes.
+Unchecked stats can be changed once with **Apply**. Echo requires the active
+effect and Current health follows verified maximum health. Co-op guests
+and other game builds stay read-only in the Rust preview. The stable
+release instructions below apply to the Python trainer.
 
 The preview appends timestamped diagnostics in the background to
 `%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-rust.log`. To watch the

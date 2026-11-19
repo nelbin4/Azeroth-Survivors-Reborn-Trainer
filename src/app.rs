@@ -17,8 +17,9 @@ use crate::{
     diagnostic_log::event,
     hunt::{self, Snapshot},
     process::{self, Games, Session},
+    session_role::RoleProof,
     settings::Settings,
-    stats_ui::{STATS, Stat, grouped},
+    stats_ui::{STATS, Stat},
     update,
 };
 
@@ -76,7 +77,8 @@ impl Drop for Search {
 
 struct Apply {
     stop: Arc<AtomicBool>,
-    result: Receiver<io::Result<u32>>,
+    result: Receiver<io::Result<hunt::ApplyOutcome>>,
+    automatic: bool,
 }
 
 impl Drop for Apply {
@@ -96,7 +98,13 @@ pub struct TrainerApp {
     running: bool,
     scan: Option<Search>,
     apply: Option<Apply>,
-    damage_target: String,
+    enabled: [bool; 17],
+    targets: [u32; 17],
+    target_entry: String,
+    auto_active: bool,
+    next_auto: Instant,
+    role_lease: Option<RoleProof>,
+    field_issues: std::collections::BTreeMap<&'static str, String>,
     snapshot: Option<Snapshot>,
     status: String,
     error: Option<String>,
@@ -106,6 +114,15 @@ pub struct TrainerApp {
     update_result: Option<Receiver<io::Result<update::ReleaseStatus>>>,
     update_status: String,
     update_tag: Option<String>,
+}
+
+fn checked_targets(enabled: &[bool; 17], targets: &[u32; 17]) -> hunt::Targets {
+    STATS
+        .iter()
+        .zip(enabled)
+        .zip(targets)
+        .filter_map(|((stat, enabled), target)| enabled.then_some((stat.key, *target)))
+        .collect()
 }
 
 fn task<T: Send + 'static>(
@@ -179,6 +196,9 @@ impl TrainerApp {
                 (Settings::default(), Some(format!("Settings: {error}")))
             }
         };
+        let prefs = settings.stat_preferences();
+        let enabled = std::array::from_fn(|index| STATS[index].checked(prefs));
+        let targets = std::array::from_fn(|index| STATS[index].saved_target(prefs));
         Self {
             settings,
             error,
@@ -191,7 +211,13 @@ impl TrainerApp {
             running: false,
             scan: None,
             apply: None,
-            damage_target: String::new(),
+            enabled,
+            targets,
+            target_entry: targets[0].to_string(),
+            auto_active: false,
+            next_auto: Instant::now(),
+            role_lease: None,
+            field_issues: Default::default(),
             snapshot: None,
             status: "Start Reborn to find a character.".into(),
             show_details: false,
@@ -216,7 +242,7 @@ impl TrainerApp {
             }
             self.session = session;
             self.scan = None;
-            self.apply = None;
+            self.stop_auto();
             self.snapshot = None;
             self.status = if self.session.is_some() {
                 "Start a run, then click Find.".into()
@@ -319,11 +345,16 @@ impl TrainerApp {
                                 search.started.elapsed().as_millis()
                             ),
                         );
-                        self.status = if let Some(damage) = &snapshot.damage {
-                            self.damage_target = damage.current.to_string();
-                            "Character found. Damage bonus Apply requires a solo run.".into()
+                        self.status = if snapshot.stats.is_some() {
+                            self.auto_active = self.enabled.contains(&true);
+                            self.next_auto = Instant::now();
+                            if self.auto_active {
+                                "Checking session before applying checked stats.".into()
+                            } else {
+                                "Character verified. Choose a stat to apply.".into()
+                            }
                         } else if snapshot.character.is_some() {
-                            "Character found. Diagnostic readings only.".into()
+                            "Character found. This build is read-only.".into()
                         } else {
                             "No live character verified. Start a run and retry.".into()
                         };
@@ -354,18 +385,48 @@ impl TrainerApp {
                 Err(TryRecvError::Empty) => None,
             })
         {
-            self.apply = None;
+            let automatic = self.apply.take().unwrap().automatic;
             match outcome {
-                Ok(value) => {
-                    if let Some(damage) = self.snapshot.as_mut().and_then(|s| s.damage.as_mut()) {
-                        damage.current = value;
+                Ok(result) => {
+                    if let Some(snapshot) = &mut self.snapshot {
+                        snapshot.values = result.values;
                     }
-                    self.status = format!("Damage bonus applied and verified at {value}%.");
+                    self.role_lease = Some(result.lease);
+                    self.field_issues = result.skipped;
+                    let count = result.applied;
+                    let warning = self.field_issues.len();
+                    self.status = format!(
+                        "{} · {count} applied{}",
+                        if automatic { "Auto Freeze" } else { "Apply" },
+                        if warning > 0 {
+                            format!(" · {warning} waiting")
+                        } else {
+                            String::new()
+                        }
+                    );
+                    event(
+                        "apply.batch_finished",
+                        format_args!(
+                            "role={:?} automatic={automatic} applied={count} waiting={warning}",
+                            result.role
+                        ),
+                    );
                 }
                 Err(error) => {
                     event("apply.failed", format_args!("{error}"));
+                    self.stop_auto();
                     self.status = error.to_string();
                 }
+            }
+            self.next_auto = Instant::now() + Duration::from_secs(1);
+        }
+        if self.auto_active && self.apply.is_none() && Instant::now() >= self.next_auto {
+            let targets = checked_targets(&self.enabled, &self.targets);
+            if targets.is_empty() {
+                self.stop_auto();
+                self.status = "No checked stats.".into();
+            } else {
+                self.start_apply(context, targets, true);
             }
         }
         if let Some(result) = finished(&mut self.update_result) {
@@ -385,6 +446,10 @@ impl TrainerApp {
 
     fn start_find(&mut self, context: &egui::Context) {
         if let Some(session) = self.session.clone() {
+            if !self.commit_target() {
+                return;
+            }
+            self.stop_auto();
             self.snapshot = None;
             self.error = None;
             self.status = "Finding the selected character…".into();
@@ -402,21 +467,77 @@ impl TrainerApp {
         }
     }
 
-    fn apply_damage(&mut self, context: &egui::Context) {
-        let Some(proof) = self.snapshot.as_ref().and_then(|s| s.damage.clone()) else {
-            return;
+    fn stop_auto(&mut self) {
+        self.auto_active = false;
+        self.apply = None;
+        self.role_lease = None;
+        self.field_issues.clear();
+    }
+
+    fn save_preferences(&mut self) {
+        let enabled: Vec<_> = STATS
+            .iter()
+            .enumerate()
+            .filter_map(|(index, stat)| self.enabled[index].then_some(stat.key))
+            .collect();
+        let targets: std::collections::BTreeMap<_, _> = STATS
+            .iter()
+            .enumerate()
+            .map(|(index, stat)| (stat.key, self.targets[index]))
+            .collect();
+        if let Err(error) = self
+            .settings
+            .set_stat_preferences(serde_json::json!({"enabled": enabled, "targets": targets}))
+        {
+            self.error = Some(format!("Could not save stat preferences: {error}"));
+            event("settings.save_failed", format_args!("{error}"));
+        }
+    }
+
+    fn commit_target(&mut self) -> bool {
+        let stat = &STATS[self.selected];
+        if stat.key == "health" {
+            return true;
+        }
+        let value = self
+            .target_entry
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|value| stat.valid_target(*value));
+        let Some(value) = value else {
+            self.status = format!(
+                "{} target must be between {} and {}.",
+                stat.label, stat.min, stat.max
+            );
+            return false;
         };
-        let Ok(target) = self.damage_target.trim().parse::<u32>() else {
-            self.status = "Enter a whole number from 0 to 9,999.".into();
+        if value != self.targets[self.selected] {
+            self.targets[self.selected] = value;
+            self.save_preferences();
+        }
+        true
+    }
+
+    fn start_apply(&mut self, context: &egui::Context, targets: hunt::Targets, automatic: bool) {
+        let Some(proof) = self.snapshot.as_ref().and_then(|s| s.stats.clone()) else {
+            self.stop_auto();
             return;
         };
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
-        self.status = "Checking the solo session before Apply…".into();
+        let lease = self.role_lease;
+        if lease.is_none() {
+            self.status = "Checking whether the session is solo or hosted…".into();
+        }
         let result = task(context, move || {
-            hunt::apply_damage(&proof, target, &worker_stop)
+            hunt::apply_stats(&proof, &targets, lease, &worker_stop)
         });
-        self.apply = Some(Apply { stop, result });
+        self.apply = Some(Apply {
+            stop,
+            result,
+            automatic,
+        });
     }
 
     fn locate(&mut self) -> Option<PathBuf> {
@@ -548,17 +669,18 @@ impl TrainerApp {
             );
             self.confirm_stop = None;
             self.scan = None;
+            self.stop_auto();
             self.snapshot = None;
             self.stop_result = Some(task(context, move || process::stop(&session)));
         }
     }
 
     fn stat_display(&self, stat: &Stat) -> Option<String> {
-        if stat.key == "damage" {
-            let damage = self.snapshot.as_ref()?.damage.as_ref()?;
-            return Some(format!("{}%", grouped(u64::from(damage.current))));
+        let snapshot = self.snapshot.as_ref()?;
+        if let Some(value) = snapshot.values.get(stat.key) {
+            return Some(stat.display(*value));
         }
-        let character = self.snapshot.as_ref()?.character.as_ref()?;
+        let character = snapshot.character.as_ref()?;
         let index = match stat.key {
             "health" => 0,
             "max_health" => 1,
@@ -566,7 +688,7 @@ impl TrainerApp {
         };
         Some(format!(
             "≈ {}",
-            grouped(character.health_candidate[index] as u64)
+            stat.display(character.health_candidate[index] as u64)
         ))
     }
 
@@ -581,6 +703,7 @@ impl TrainerApp {
         ];
         ui.spacing_mut().item_spacing.y = 2.0;
         let mut selected = self.selected;
+        let mut preferences_changed = false;
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
@@ -589,40 +712,82 @@ impl TrainerApp {
         for (_, width, minimum) in columns {
             table = table.column(Column::initial(width).at_least(minimum).clip(true));
         }
-        table.header(31.0, |mut header| {
-            for (title, _, _) in columns {
-                header.col(|ui| { ui.strong(title); });
-            }
-        }).body(|mut body| {
-            for (index, stat) in STATS.iter().enumerate() {
-                let target = stat.target(self.settings.stat_preferences());
-                let mut checked = stat.checked(self.settings.stat_preferences());
-                let current = self.stat_display(stat);
-                let status = if current.is_some() && stat.key == "damage" { "Verified" }
-                    else if current.is_some() { "Diagnostic" }
-                    else if self.scan.is_some() { "Searching" } else { "Not found" };
-                body.row(29.0, |mut row| {
-                    row.set_selected(index == self.selected);
-                    row.col(|ui| {
-                        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 22.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                            ui.add_enabled(false, egui::Checkbox::without_text(&mut checked))
-                                .on_disabled_hover_text("Saved freeze preference. Freezing is disabled in this preview.");
-                        });
+        table
+            .header(31.0, |mut header| {
+                for (title, _, _) in columns {
+                    header.col(|ui| {
+                        ui.strong(title);
                     });
-                    row.col(|ui| { ui.label(stat.label); });
-                    row.col(|ui| { ui.label(current.as_deref().unwrap_or("—")); });
-                    row.col(|ui| { ui.label(target); });
-                    row.col(|ui| { ui.label(RichText::new(status).color(MUTED)); });
-                    if row.response().clicked() {
-                        if selected != index {
-                            event("stats.selected", format_args!("stat={}", stat.key));
+                }
+            })
+            .body(|mut body| {
+                for (index, stat) in STATS.iter().enumerate() {
+                    let target = stat.target(self.targets[index]);
+                    let mut checked = self.enabled[index];
+                    let current = self.stat_display(stat);
+                    let verified = self
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.values.contains_key(stat.key));
+                    let status = if self.field_issues.contains_key(stat.key) {
+                        "Waiting"
+                    } else if verified && checked && self.auto_active && self.role_lease.is_some() {
+                        "Frozen"
+                    } else if verified {
+                        "Verified"
+                    } else if current.is_some() {
+                        "Diagnostic"
+                    } else if self.scan.is_some() {
+                        "Searching"
+                    } else {
+                        "Not found"
+                    };
+                    body.row(29.0, |mut row| {
+                        row.set_selected(index == self.selected);
+                        row.col(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), 22.0),
+                                egui::Layout::top_down(egui::Align::Center),
+                                |ui| {
+                                    let response = ui.add_enabled(
+                                        self.apply.is_none(),
+                                        egui::Checkbox::without_text(&mut checked),
+                                    );
+                                    if response.changed() {
+                                        self.enabled[index] = checked;
+                                        preferences_changed = true;
+                                    }
+                                },
+                            );
+                        });
+                        row.col(|ui| {
+                            ui.label(stat.label);
+                        });
+                        row.col(|ui| {
+                            ui.label(current.as_deref().unwrap_or("—"));
+                        });
+                        row.col(|ui| {
+                            ui.label(target);
+                        });
+                        row.col(|ui| {
+                            ui.label(RichText::new(status).color(MUTED));
+                        });
+                        if row.response().clicked() {
+                            if selected != index {
+                                event("stats.selected", format_args!("stat={}", stat.key));
+                            }
+                            selected = index;
                         }
-                        selected = index;
-                    }
-                });
-            }
-        });
-        self.selected = selected;
+                    });
+                }
+            });
+        if self.selected != selected && self.commit_target() {
+            self.selected = selected;
+            self.target_entry = self.targets[selected].to_string();
+        }
+        if preferences_changed {
+            self.save_preferences();
+        }
     }
 
     fn search_progress(&self, ui: &mut egui::Ui) {
@@ -666,11 +831,27 @@ impl TrainerApp {
                 self.start_find(context);
             }
         }
-        ui.add_enabled(
-            false,
-            Button::new("Stop Freeze").min_size(egui::vec2(width, 32.0)),
-        )
-        .on_disabled_hover_text("Freezing is disabled in 0.9.9b.");
+        let can_freeze = self.snapshot.as_ref().is_some_and(|s| s.stats.is_some());
+        let freeze_label = if self.auto_active {
+            "Stop Freeze"
+        } else {
+            "Resume Freeze"
+        };
+        if ui
+            .add_enabled(
+                can_freeze,
+                Button::new(freeze_label).min_size(egui::vec2(width, 32.0)),
+            )
+            .clicked()
+        {
+            if self.auto_active {
+                self.stop_auto();
+                self.status = "Freezes stopped.".into();
+            } else if self.commit_target() {
+                self.auto_active = true;
+                self.next_auto = Instant::now();
+            }
+        }
         self.search_progress(ui);
         ui.colored_label(MINT, &self.status);
         if let Some(scan) = &self.scan {
@@ -689,48 +870,47 @@ impl TrainerApp {
                 .color(MINT),
         );
         ui.label(if stat.percent { "Target (%)" } else { "Target" });
-        let damage_selected = stat.key == "damage" && current.is_some();
-        let can_apply = damage_selected
+        let editable = self.apply.is_none() && stat.key != "health";
+        let reply = ui.add_enabled(
+            editable,
+            egui::TextEdit::singleline(&mut self.target_entry).desired_width(width - 10.0),
+        );
+        if reply.lost_focus() {
+            self.commit_target();
+        }
+        let can_apply = can_freeze
             && self.apply.is_none()
             && self.stop_result.is_none()
             && self.session.is_some()
             && self.scan.is_none();
-        if damage_selected {
-            ui.add_enabled(
-                can_apply,
-                egui::TextEdit::singleline(&mut self.damage_target).desired_width(width - 10.0),
-            );
-        } else {
-            let mut target = stat.target(self.settings.stat_preferences());
-            ui.add_enabled(
-                false,
-                egui::TextEdit::singleline(&mut target).desired_width(width - 10.0),
-            );
-        }
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(can_apply, Button::new("Apply").fill(ACCENT))
                 .clicked()
+                && self.commit_target()
             {
-                self.apply_damage(context);
+                self.start_apply(
+                    context,
+                    [(stat.key, self.targets[self.selected])].into(),
+                    false,
+                );
             }
             if ui
-                .add_enabled(can_apply, Button::new("Use maximum"))
+                .add_enabled(editable, Button::new("Use maximum"))
                 .clicked()
             {
-                self.damage_target = stat.max.to_string();
+                self.target_entry = stat.max.to_string();
+                self.commit_target();
             }
         });
-        ui.label(
-            RichText::new(if damage_selected {
-                "One-time Apply in a verified solo run."
-            } else if current.is_some() {
-                "Approximate reading."
-            } else {
-                "Apply is available only for verified Damage bonus."
-            })
-            .color(MUTED),
-        );
+        let hint = if let Some(error) = self.field_issues.get(stat.key) {
+            error.as_str()
+        } else if stat.key == "health" {
+            "Current health follows verified maximum health."
+        } else {
+            "Find applies and holds checked targets."
+        };
+        ui.label(RichText::new(hint).color(MUTED));
     }
 
     fn diagnostic_text(&self) -> String {
@@ -747,8 +927,8 @@ impl TrainerApp {
                 || "—".into(),
                 |c| format!("{} · slot {} of {}", c.name, c.index + 1, c.count),
             );
-        let access = if self.snapshot.as_ref().is_some_and(|s| s.damage.is_some()) {
-            "Damage bonus Apply · Solo verification required"
+        let access = if self.snapshot.as_ref().is_some_and(|s| s.stats.is_some()) {
+            "Verified mapping · Solo or host verification required"
         } else {
             "Read-only"
         };
@@ -830,5 +1010,24 @@ impl eframe::App for TrainerApp {
                     ui.monospace(text);
                 });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automatic_apply_uses_only_checked_custom_targets() {
+        let mut enabled = [false; 17];
+        enabled[0] = true;
+        enabled[2] = true;
+        let mut targets = std::array::from_fn(|index| STATS[index].max);
+        targets[0] = 222;
+        targets[2] = 127;
+        assert_eq!(
+            checked_targets(&enabled, &targets),
+            [("damage", 222), ("crit_damage", 127)].into()
+        );
     }
 }

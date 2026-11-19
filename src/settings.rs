@@ -61,14 +61,22 @@ impl Settings {
     }
 
     pub fn set_game_path(&mut self, path: &Path) -> io::Result<()> {
-        let Some(file) = &self.path else {
-            return Err(io::Error::other("Settings could not be loaded."));
-        };
         let path = path
             .to_str()
             .ok_or_else(|| io::Error::other("Game path is not Unicode."))?;
+        self.save("game_exe", Value::String(path.into()))
+    }
+
+    pub fn set_stat_preferences(&mut self, preferences: Value) -> io::Result<()> {
+        self.save("stats", preferences)
+    }
+
+    fn save(&mut self, key: &str, value: Value) -> io::Result<()> {
+        let Some(file) = &self.path else {
+            return Err(io::Error::other("Settings could not be loaded."));
+        };
         let mut fields = self.fields.clone();
-        fields.insert("game_exe".into(), Value::String(path.into()));
+        fields.insert(key.into(), value);
         fs::create_dir_all(file.parent().expect("settings parent"))?;
         let temp = file.with_extension(format!("{}.tmp", std::process::id()));
         fs::write(&temp, serde_json::to_vec_pretty(&fields)?)?;

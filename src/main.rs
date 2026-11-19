@@ -6,6 +6,7 @@ mod hunt;
 mod process;
 mod session_role;
 mod settings;
+mod stat_fields;
 mod stats_ui;
 mod update;
 

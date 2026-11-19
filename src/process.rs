@@ -364,12 +364,12 @@ impl Reader {
 }
 
 /// Holds the same process-scoped mutex name as the Python trainer.
-pub struct DamageWriter {
+pub struct StatWriter {
     process: Handle,
     _lock: Handle,
 }
 
-impl DamageWriter {
+impl StatWriter {
     pub fn open(session: &Session) -> io::Result<Self> {
         use sha2::{Digest, Sha256};
         use windows_sys::Win32::{
@@ -414,10 +414,9 @@ impl DamageWriter {
         })
     }
 
-    pub(crate) fn write_value(&self, address: usize, value: u32) -> io::Result<()> {
+    pub(crate) fn write_value(&self, address: usize, value: &[u8]) -> io::Result<()> {
         use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
 
-        let value = value.to_le_bytes();
         let mut written = 0;
         // The caller has revalidated this single mapped field and session.
         let ok = unsafe {
@@ -434,7 +433,7 @@ impl DamageWriter {
         } else if written != value.len() {
             Err(io::Error::new(
                 io::ErrorKind::WriteZero,
-                "Incomplete damage write.",
+                "Incomplete stat write.",
             ))
         } else {
             Ok(())
@@ -488,11 +487,11 @@ mod tests {
         let handle =
             Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) }).unwrap();
         let session = identity(pid, &handle).unwrap();
-        let writer = DamageWriter::open(&session).unwrap();
-        assert!(DamageWriter::open(&session).is_err());
+        let writer = StatWriter::open(&session).unwrap();
+        assert!(StatWriter::open(&session).is_err());
         let values = UnsafeCell::new([17u32, 12]);
         let address = values.get() as usize;
-        writer.write_value(address, 18).unwrap();
+        writer.write_value(address, &18u32.to_le_bytes()).unwrap();
         let mut bytes = [0; 8];
         Reader::open(&session)
             .unwrap()
@@ -501,6 +500,6 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()), 18);
         assert_eq!(u32::from_le_bytes(bytes[4..].try_into().unwrap()), 12);
         drop(writer);
-        assert!(DamageWriter::open(&session).is_ok());
+        assert!(StatWriter::open(&session).is_ok());
     }
 }
