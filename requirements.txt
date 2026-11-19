@@ -1,2 +1,0 @@
-psutil>=7.0
-capstone>=5.0.7,<6

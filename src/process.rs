@@ -197,6 +197,45 @@ pub fn stop(session: &Session) -> io::Result<()> {
     Ok(())
 }
 
+pub fn current_creation_time() -> io::Result<u64> {
+    let pid = std::process::id();
+    let handle = Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })?;
+    Ok(identity(pid, &handle)?.created)
+}
+
+pub fn wait_for_update_parent(pid: u32, created: u64, target: &Path) -> io::Result<()> {
+    use windows_sys::Win32::{
+        Foundation::{ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT},
+        System::Threading::WaitForSingleObject,
+    };
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    if pid == 0 {
+        return Ok(());
+    }
+    let process = match Handle::new(unsafe {
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid)
+    }) {
+        Ok(handle) => handle,
+        Err(error) if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let session = match identity(pid, &process) {
+        Ok(session) => session,
+        Err(_) if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if session.created != created || !same_path(&session.path, target) {
+        return Ok(());
+    }
+    match unsafe { WaitForSingleObject(process.0, 30_000) } {
+        WAIT_OBJECT_0 => Ok(()),
+        WAIT_TIMEOUT => Err(io::Error::other(
+            "Timed out waiting for the trainer to close.",
+        )),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
 pub struct Reader(Handle);
 
 #[repr(C)]

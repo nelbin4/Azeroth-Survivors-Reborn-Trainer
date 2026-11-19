@@ -11,7 +11,12 @@ mod stats_ui;
 mod update;
 
 fn main() -> eframe::Result {
-    if std::env::args().nth(1).as_deref() == Some("--smoke-test") {
+    let mut arguments = std::env::args_os().skip(1);
+    let argument = arguments.next();
+    if argument
+        .as_deref()
+        .is_some_and(|value| value == "--smoke-test")
+    {
         app::icon().expect("embedded trainer icon should decode");
         let core = env!("CARGO_PKG_VERSION").split('-').next().unwrap();
         update::version(core).expect("trainer package version should be valid");
@@ -20,6 +25,48 @@ fn main() -> eframe::Result {
     let _log = settings::state_directory()
         .and_then(|directory| diagnostic_log::Log::start(directory.join("reborn-rust.log")))
         .ok();
+    if argument
+        .as_deref()
+        .is_some_and(|value| value == "--install-update" || value == "--smoke-test-update")
+    {
+        let result = if argument
+            .as_deref()
+            .is_some_and(|value| value == "--smoke-test-update")
+        {
+            update::smoke_install()
+        } else {
+            (|| {
+                let invalid = || std::io::Error::other("Invalid installer arguments.");
+                let target = arguments.next().ok_or_else(invalid)?;
+                let digest = arguments
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(invalid)?;
+                let pid = arguments
+                    .next()
+                    .and_then(|value| value.to_str()?.parse().ok())
+                    .ok_or_else(invalid)?;
+                let created = arguments
+                    .next()
+                    .and_then(|value| value.to_str()?.parse().ok())
+                    .ok_or_else(invalid)?;
+                if arguments.next().is_some() {
+                    return Err(invalid());
+                }
+                update::install(std::path::Path::new(&target), &digest, pid, created)
+            })()
+        };
+        if let Err(error) = result {
+            diagnostic_log::event("update.helper_failed", format_args!("{error}"));
+            drop(_log);
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        update::cleanup();
+    });
     diagnostic_log::event(
         "app.start",
         format_args!("version={}", env!("CARGO_PKG_VERSION")),

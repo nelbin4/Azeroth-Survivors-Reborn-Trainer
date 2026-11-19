@@ -1,7 +1,6 @@
-Azeroth Survivor Reborn Trainer v0.9.19
+Azeroth Survivor Reborn Trainer v1.0.0
 
-- Keep looking for the selected character in co-op when another player's slot has no readable identity.
-- Verify that the lobby role stays consistent during a read, and surface role errors and guest status in the trainer.
-- Preserve queued targets during role verification and clear targets for confirmed guest sessions or unavailable stat mappings.
-- Import legacy settings when the per-user settings file is missing.
-- Update CI and release actions and resolve the remaining audit lint findings.
+- First stable Rust release with a single standalone Windows x64 executable.
+- Find applies and holds the configured targets in the Enabled column for verified solo and co-op host sessions.
+- The footer displays the installed version and checks GitHub for updates at startup. Download & Install verifies the executable and restarts the trainer.
+- Writes currently support game build ab1d6c071b56.

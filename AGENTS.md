@@ -1,29 +1,20 @@
 # Trainer releases
 
-The first stable, fully Rust trainer release is `1.0.0` (Git tag `v1.0.0`).
-Build the Rust test preview as `0.9.9b` (`0.9.9-beta` in Cargo). Keep it on
-the migration branch as a GitHub Actions artifact. Wait for the user's explicit
-approval before changing the preview version or publishing `v1.0.0`.
-For routine releases, increment the patch number from 0 through 9. After patch
-9, increment the minor number and reset the patch to 0. For example, release
-`1.1.0` after `1.0.9`.
+The stable trainer uses Rust. The version lives in `Cargo.toml` and must
+match `Cargo.lock`. For routine releases, increment the patch from 0 through
+9. After patch 9, increment the minor and reset the patch to 0, for example
+`1.0.9` → `1.1.0`.
 
-Keep the full Rust source, tests, Cargo manifest and lockfile, and build
-workflow in this GitHub repository. Starting with `v1.0.0`, GitHub Actions
-builds and publishes one standalone Windows x64 EXE as the installable
-release asset. The EXE must run without companion files and handle update
-installation through the same binary. Keep the executable filename and
-SHA-256 verification compatible with the existing updater.
+Keep the Rust source, tests, assets, and build workflow in the repository.
+GitHub Actions builds, tests, and publishes a single standalone Windows x64
+EXE with the updater-compatible name `Azeroth.Survivor.Reborn.Trainer.exe`.
+The same EXE handles updates. Run builds and tests in GitHub Actions. Local
+formatting and lockfile generation are fine.
 
-Use GitHub Actions for all builds, tests, and release packaging of the Rust
-trainer. Local formatting and lockfile generation are fine. Download the
-workflow artifact for Windows verification.
+When a requested change increments the version, verify the branch build,
+commit the related changes, and push to `origin/main`. Verify that the
+matching GitHub release and its single executable are available and that the
+updater recognizes the asset.
 
-When a requested trainer change increments the version, run the tests,
-commit the related changes, and push the version to `origin/main`. Verify
-that the workflow tags and publishes the matching release and that the
-updater recognizes its executable. Before the Rust cutover, the Python
-workflow still reads `VERSION` in `trainer.py` and uploads the EXE, ZIP, and
-checksums.
-
-Preserve unrelated local changes and publish only the intended trainer source. Do not include local saves, settings, diagnostics, caches, or build artifacts in the commit.
+Preserve unrelated local changes. Keep saves, settings, diagnostics, caches,
+and built executables out of commits.

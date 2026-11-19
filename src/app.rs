@@ -34,13 +34,6 @@ const ACCENT_TEXT: Color32 = Color32::from_rgb(16, 37, 31);
 const EDITOR_WIDTH: f32 = 242.0;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn display_version() -> String {
-    match VERSION.strip_suffix("-beta") {
-        Some(base) => format!("{base}b"),
-        None => format!("v{VERSION}"),
-    }
-}
-
 pub fn icon() -> io::Result<egui::IconData> {
     let image = include_bytes!("../assets/trainer-logo.png");
     let mut reader = png::Decoder::new(Cursor::new(image))
@@ -113,7 +106,11 @@ pub struct TrainerApp {
     logo: Option<egui::TextureHandle>,
     update_result: Option<Receiver<io::Result<update::ReleaseStatus>>>,
     update_status: String,
-    update_tag: Option<String>,
+    update_asset: Option<update::Asset>,
+    update_error: Option<String>,
+    manual_update_check: bool,
+    using_latest_until: Option<Instant>,
+    install_result: Option<Receiver<io::Result<()>>>,
 }
 
 fn checked_targets(enabled: &[bool; 17], targets: &[u32; 17]) -> hunt::Targets {
@@ -224,8 +221,12 @@ impl TrainerApp {
             selected: 0,
             logo,
             update_result: Some(task(&context.egui_ctx, || update::check(VERSION))),
-            update_status: "Checking releases…".into(),
-            update_tag: None,
+            update_status: "Checking…".into(),
+            update_asset: None,
+            update_error: None,
+            manual_update_check: false,
+            using_latest_until: None,
+            install_result: None,
         }
     }
 
@@ -430,14 +431,39 @@ impl TrainerApp {
             }
         }
         if let Some(result) = finished(&mut self.update_result) {
+            let manual = std::mem::take(&mut self.manual_update_check);
             match result {
                 Ok(status) => {
-                    self.update_status = format!("Latest stable · {}", status.tag);
-                    self.update_tag = status.available.then_some(status.tag);
+                    self.update_asset = status.available;
+                    self.update_status = if self.update_asset.is_some() {
+                        "Update Available"
+                    } else {
+                        "Latest"
+                    }
+                    .into();
+                    if manual && self.update_asset.is_none() {
+                        self.using_latest_until = Some(Instant::now() + Duration::from_secs(3));
+                    }
                 }
                 Err(error) => {
                     event("update.check_failed", format_args!("{error}"));
-                    self.update_status = format!("Release check: {error}");
+                    self.update_status = "Update check failed".into();
+                    self.update_error = Some(error.to_string());
+                }
+            }
+        }
+        if let Some(result) = finished(&mut self.install_result) {
+            match result {
+                Ok(()) => {
+                    self.stop_auto();
+                    self.scan = None;
+                    self.update_status = "Restarting…".into();
+                    context.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(error) => {
+                    event("update.download_failed", format_args!("{error}"));
+                    self.update_status = "Update failed".into();
+                    self.update_error = Some(error.to_string());
                 }
             }
         }
@@ -607,22 +633,32 @@ impl TrainerApp {
                 egui::Layout::top_down(egui::Align::RIGHT),
                 |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let label = if self.update_tag.is_some() {
-                            "View update"
+                        let latest = self
+                            .using_latest_until
+                            .is_some_and(|until| Instant::now() < until);
+                        let idle = self.update_result.is_none()
+                            && self.install_result.is_none()
+                            && !latest;
+                        let label = if self.install_result.is_some() {
+                            "Downloading…"
+                        } else if self.update_result.is_some() {
+                            "Checking…"
+                        } else if latest {
+                            "Using Latest"
+                        } else if self.update_asset.is_some() {
+                            "Download & Install"
                         } else {
                             "Check updates"
                         };
-                        if ui
-                            .add_enabled(self.update_result.is_none(), Button::new(label))
-                            .clicked()
-                        {
-                            if let Some(tag) = &self.update_tag {
-                                context.open_url(egui::OpenUrl::new_tab(format!(
-                                    "{}/releases/tag/{tag}",
-                                    update::PROJECT
-                                )));
+                        if ui.add_enabled(idle, Button::new(label)).clicked() {
+                            self.update_error = None;
+                            if let Some(asset) = self.update_asset.clone() {
+                                self.update_status = "Downloading update…".into();
+                                self.install_result =
+                                    Some(task(context, move || update::stage_and_launch(&asset)));
                             } else {
-                                self.update_status = "Checking releases…".into();
+                                self.update_status = "Checking…".into();
+                                self.manual_update_check = true;
                                 self.update_result = Some(task(context, || update::check(VERSION)));
                             }
                         }
@@ -630,11 +666,31 @@ impl TrainerApp {
                             context.open_url(egui::OpenUrl::new_tab(update::PROJECT));
                         }
                     });
-                    ui.label(
-                        RichText::new(format!("{} · {}", display_version(), self.update_status))
-                            .small()
-                            .color(MINT),
-                    );
+                    let mut status =
+                        RichText::new(format!("{VERSION} - {}", self.update_status)).small();
+                    if self.update_status == "Update Available" {
+                        let seconds = context.input(|input| input.time);
+                        let glow = ((seconds * std::f64::consts::TAU / 5.0).cos() + 1.0) * 0.5;
+                        status = status
+                            .color(Color32::from_rgb(
+                                255,
+                                200 + (45.0 * glow) as u8,
+                                35 + (105.0 * glow) as u8,
+                            ))
+                            .background_color(Color32::from_rgba_unmultiplied(
+                                255,
+                                215,
+                                65,
+                                (28.0 * glow) as u8,
+                            ));
+                        context.request_repaint_after(Duration::from_millis(50));
+                    } else {
+                        status = status.color(MINT);
+                    }
+                    let response = ui.label(status);
+                    if let Some(error) = &self.update_error {
+                        response.on_hover_text(error);
+                    }
                 },
             );
         });
