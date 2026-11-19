@@ -1,5 +1,4 @@
-Azeroth Survivor Reborn Trainer v1.0.4
+Azeroth Survivor Reborn Trainer v1.0.5
 
-- Recover from Windows partial memory reads during the session scan by retrying in smaller chunks.
-- Recognize the verified game image after PE timestamp or checksum changes and retain live stat and session checks.
-- Expand Advanced into a copyable report with build, process, session, stat targets, errors, and the background log path.
+- Find applies enabled targets once after verifying the selected character and session.
+- Apply sets the selected stat once. Removed freeze controls and periodic stat writes.

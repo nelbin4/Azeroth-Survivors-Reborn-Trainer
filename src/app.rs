@@ -71,7 +71,6 @@ impl Drop for Search {
 struct Apply {
     stop: Arc<AtomicBool>,
     result: Receiver<io::Result<hunt::ApplyOutcome>>,
-    automatic: bool,
 }
 
 impl Drop for Apply {
@@ -94,10 +93,6 @@ pub struct TrainerApp {
     enabled: [bool; 17],
     targets: [u32; 17],
     target_entry: String,
-    auto_active: bool,
-    next_auto: Instant,
-    auto_failures: u8,
-    role_lease: Option<RoleProof>,
     cached_role: Option<RoleProof>,
     last_verified_role: Option<crate::session_role::Role>,
     last_apply_error: Option<String>,
@@ -233,10 +228,6 @@ impl TrainerApp {
             enabled,
             targets,
             target_entry: targets[0].to_string(),
-            auto_active: false,
-            next_auto: Instant::now(),
-            auto_failures: 0,
-            role_lease: None,
             cached_role: None,
             last_verified_role: None,
             last_apply_error: None,
@@ -273,7 +264,7 @@ impl TrainerApp {
             self.last_verified_role = None;
             self.last_apply_error = None;
             self.scan = None;
-            self.stop_auto();
+            self.reset_apply();
             self.snapshot = None;
             self.status = if self.session.is_some() {
                 "Start a run, then click Find.".into()
@@ -377,13 +368,7 @@ impl TrainerApp {
                             ),
                         );
                         self.status = if snapshot.stats.is_some() {
-                            self.auto_active = self.enabled.contains(&true);
-                            self.next_auto = Instant::now();
-                            if self.auto_active {
-                                "Checking session before applying checked stats.".into()
-                            } else {
-                                "Character verified. Choose a stat to apply.".into()
-                            }
+                            "Character verified. Choose a stat to apply.".into()
                         } else if snapshot.character.is_some() {
                             format!(
                                 "Build {} is read-only. Stat writes are verified for {}.",
@@ -393,7 +378,14 @@ impl TrainerApp {
                         } else {
                             "No live character verified. Start a run and retry.".into()
                         };
+                        let verified = snapshot.stats.is_some();
                         self.snapshot = Some(snapshot);
+                        if verified {
+                            let targets = checked_targets(&self.enabled, &self.targets);
+                            if !targets.is_empty() {
+                                self.start_apply(context, targets);
+                            }
+                        }
                     }
                     Err(error) => {
                         event(
@@ -420,68 +412,36 @@ impl TrainerApp {
                 Err(TryRecvError::Empty) => None,
             })
         {
-            let automatic = self.apply.take().unwrap().automatic;
-            self.next_auto = Instant::now() + Duration::from_secs(1);
+            self.apply = None;
             match outcome {
                 Ok(result) => {
-                    self.auto_failures = 0;
                     if let Some(snapshot) = &mut self.snapshot {
                         snapshot.values = result.values;
                     }
-                    self.role_lease = Some(result.lease);
                     self.cached_role = Some(result.lease);
                     self.last_verified_role = Some(result.role);
                     self.field_issues = result.skipped;
                     let count = result.applied;
                     let warning = self.field_issues.len();
                     self.status = format!(
-                        "{} · {count} applied{}",
-                        if automatic { "Auto Freeze" } else { "Apply" },
+                        "Apply · {count} applied{}",
                         if warning > 0 {
-                            format!(" · {warning} waiting")
+                            format!(" · {warning} skipped")
                         } else {
                             String::new()
                         }
                     );
                     event(
                         "apply.batch_finished",
-                        format_args!(
-                            "role={:?} automatic={automatic} applied={count} waiting={warning}",
-                            result.role
-                        ),
+                        format_args!("role={:?} applied={count} skipped={warning}", result.role),
                     );
                 }
                 Err(error) => {
                     event("apply.failed", format_args!("{error}"));
                     self.last_apply_error = Some(error.to_string());
                     self.cached_role = None;
-                    self.auto_failures += 1;
-                    if self.auto_active
-                        && self.auto_failures <= 2
-                        && !matches!(
-                            error.kind(),
-                            io::ErrorKind::PermissionDenied
-                                | io::ErrorKind::InvalidData
-                                | io::ErrorKind::Interrupted
-                        )
-                    {
-                        self.role_lease = None;
-                        self.next_auto = Instant::now() + Duration::from_secs(2);
-                        self.status = format!("Freeze paused. Rechecking session: {error}");
-                    } else {
-                        self.stop_auto();
-                        self.status = error.to_string();
-                    }
+                    self.status = error.to_string();
                 }
-            }
-        }
-        if self.auto_active && self.apply.is_none() && Instant::now() >= self.next_auto {
-            let targets = checked_targets(&self.enabled, &self.targets);
-            if targets.is_empty() {
-                self.stop_auto();
-                self.status = "No checked stats.".into();
-            } else {
-                self.start_apply(context, targets, true);
             }
         }
         if let Some(result) = finished(&mut self.update_result) {
@@ -509,7 +469,7 @@ impl TrainerApp {
         if let Some(result) = finished(&mut self.install_result) {
             match result {
                 Ok(()) => {
-                    self.stop_auto();
+                    self.reset_apply();
                     self.scan = None;
                     self.update_status = "Restarting…".into();
                     context.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -530,7 +490,7 @@ impl TrainerApp {
             if !self.commit_target() {
                 return;
             }
-            self.stop_auto();
+            self.reset_apply();
             self.snapshot = None;
             self.error = None;
             self.status = "Finding the selected character…".into();
@@ -548,11 +508,8 @@ impl TrainerApp {
         }
     }
 
-    fn stop_auto(&mut self) {
-        self.auto_active = false;
-        self.auto_failures = 0;
+    fn reset_apply(&mut self) {
         self.apply = None;
-        self.role_lease = None;
         self.field_issues.clear();
     }
 
@@ -601,25 +558,25 @@ impl TrainerApp {
         true
     }
 
-    fn start_apply(&mut self, context: &egui::Context, targets: hunt::Targets, automatic: bool) {
+    fn start_apply(&mut self, context: &egui::Context, targets: hunt::Targets) {
         let Some(proof) = self.snapshot.as_ref().and_then(|s| s.stats.clone()) else {
-            self.stop_auto();
+            self.reset_apply();
             return;
         };
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
-        let lease = self.role_lease.or(self.cached_role);
-        if lease.is_none() && self.auto_failures == 0 {
-            self.status = "Checking whether the session is solo or hosted…".into();
+        let lease = self.cached_role;
+        self.status = if lease.is_some() {
+            "Applying stats…"
+        } else {
+            "Checking whether the session is solo or hosted…"
         }
+        .into();
+        self.field_issues.clear();
         let result = task(context, move || {
             hunt::apply_stats(&proof, &targets, lease, &worker_stop)
         });
-        self.apply = Some(Apply {
-            stop,
-            result,
-            automatic,
-        });
+        self.apply = Some(Apply { stop, result });
     }
 
     fn locate(&mut self) -> Option<PathBuf> {
@@ -788,7 +745,7 @@ impl TrainerApp {
             );
             self.confirm_stop = None;
             self.scan = None;
-            self.stop_auto();
+            self.reset_apply();
             self.snapshot = None;
             self.stop_result = Some(task(context, move || process::stop(&session)));
         }
@@ -849,9 +806,7 @@ impl TrainerApp {
                         .as_ref()
                         .is_some_and(|s| s.values.contains_key(stat.key));
                     let status = if self.field_issues.contains_key(stat.key) {
-                        "Waiting"
-                    } else if verified && checked && self.auto_active && self.role_lease.is_some() {
-                        "Frozen"
+                        "Skipped"
                     } else if verified {
                         "Verified"
                     } else if current.is_some() {
@@ -948,27 +903,7 @@ impl TrainerApp {
                 self.start_find(context);
             }
         }
-        let can_freeze = self.snapshot.as_ref().is_some_and(|s| s.stats.is_some());
-        let freeze_label = if self.auto_active {
-            "Stop Freeze"
-        } else {
-            "Resume Freeze"
-        };
-        if ui
-            .add_enabled(
-                can_freeze,
-                Button::new(freeze_label).min_size(egui::vec2(width, 32.0)),
-            )
-            .clicked()
-        {
-            if self.auto_active {
-                self.stop_auto();
-                self.status = "Freezes stopped.".into();
-            } else if self.commit_target() {
-                self.auto_active = true;
-                self.next_auto = Instant::now();
-            }
-        }
+        let verified_layout = self.snapshot.as_ref().is_some_and(|s| s.stats.is_some());
         if self.scan.is_some() || self.apply.is_some() {
             Self::work_progress(ui);
         }
@@ -997,7 +932,7 @@ impl TrainerApp {
         if reply.lost_focus() {
             self.commit_target();
         }
-        let can_apply = can_freeze
+        let can_apply = verified_layout
             && self.apply.is_none()
             && self.stop_result.is_none()
             && self.session.is_some()
@@ -1008,11 +943,7 @@ impl TrainerApp {
                 .clicked()
                 && self.commit_target()
             {
-                self.start_apply(
-                    context,
-                    [(stat.key, self.targets[self.selected])].into(),
-                    false,
-                );
+                self.start_apply(context, [(stat.key, self.targets[self.selected])].into());
             }
             if ui
                 .add_enabled(editable, Button::new("Use maximum"))
@@ -1027,7 +958,7 @@ impl TrainerApp {
         } else if stat.key == "health" {
             "Current health follows verified maximum health."
         } else {
-            "Find applies and holds checked targets."
+            "Find applies checked targets once."
         };
         ui.label(RichText::new(hint).color(MUTED));
     }
@@ -1083,11 +1014,9 @@ impl TrainerApp {
             });
         let _ = writeln!(
             report,
-            "Last verified role: {role}\nCached role proof: {}\nFreeze requested: {}\nApply in progress: {}\nConsecutive Apply errors: {}",
+            "Last verified role: {role}\nCached role proof: {}\nApply in progress: {}",
             self.cached_role.is_some(),
-            self.auto_active,
-            self.apply.is_some(),
-            self.auto_failures
+            self.apply.is_some()
         );
         if let Some(scan) = &self.scan {
             let _ = writeln!(
@@ -1228,7 +1157,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn automatic_apply_uses_only_checked_custom_targets() {
+    fn find_apply_uses_only_checked_custom_targets() {
         let mut enabled = [false; 17];
         enabled[0] = true;
         enabled[2] = true;

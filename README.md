@@ -7,8 +7,8 @@ written in Rust. [Download the latest standalone EXE](https://github.com/nelbin4
 
 1. Run **Azeroth.Survivor.Reborn.Trainer.exe**, then start Reborn.
 2. Choose the stats in the **Enabled** column and set their targets in the side panel.
-3. Start a solo run or host a co-op run, then click **Find**. The trainer applies and holds the enabled targets after verifying the selected character and session.
-4. Use **Stop Freeze** to stop automatic writes. **Apply** sets the selected target once.
+3. Start a solo run or host a co-op run, then click **Find**. The trainer applies each enabled target once after verifying the selected character and session.
+4. Use **Apply** to set the selected stat again. Use **Find** to apply all enabled targets again.
 
 ### Game updates and session checks
 
@@ -21,7 +21,7 @@ Stat writes require a verified solo or co-op host session.
 The first role check scans memory to locate the live lobby. Repeat hunts in the
 same process can revalidate the cached proof. If Windows reports a partial read
 (error 299), the scanner retries page by page. If a page remains unreadable,
-freezes pause and session verification retries. Click **Find** again if the
+the trainer reports the verification error. Click **Find** again if the
 selected character or lobby role changes.
 
 Current health follows verified maximum health. Echo requires the active Echo effect.
