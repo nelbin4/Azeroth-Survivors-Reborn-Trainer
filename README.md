@@ -21,7 +21,7 @@ Stat writes require a verified solo or co-op host session.
 The first role check scans memory to locate the live lobby. Repeat hunts in the
 same process can revalidate the cached proof. If Windows reports a partial read
 (error 299), the scanner retries page by page. If a page remains unreadable,
-the trainer reports the verification error. Click **Find** again if the
+the trainer retries session verification. Use **Cancel Apply** to stop retries. Click **Find** again if the
 selected character or lobby role changes.
 
 Current health follows verified maximum health. Echo requires the active Echo effect.

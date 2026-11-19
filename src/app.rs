@@ -569,7 +569,7 @@ impl TrainerApp {
         self.status = if lease.is_some() {
             "Applying stats…"
         } else {
-            "Checking whether the session is solo or hosted…"
+            "Checking solo or host session…"
         }
         .into();
         self.field_issues.clear();
@@ -884,21 +884,29 @@ impl TrainerApp {
     fn stat_editor(&mut self, context: &egui::Context, ui: &mut egui::Ui) {
         let width = ui.available_width();
         let finding = self.scan.is_some();
-        let title = if finding { "Stop search" } else { "Find" };
+        let applying = self.apply.is_some();
+        let title = if finding {
+            "Stop search"
+        } else if applying {
+            "Cancel Apply"
+        } else {
+            "Find"
+        };
         let find = Button::new(RichText::new(title).size(24.0).strong().color(ACCENT_TEXT))
             .fill(ACCENT)
             .min_size(egui::vec2(width, 53.0));
         if ui
-            .add_enabled(
-                self.apply.is_none() && (finding || self.session.is_some()),
-                find,
-            )
+            .add_enabled(applying || finding || self.session.is_some(), find)
             .clicked()
         {
             if finding {
                 event("hunt.cancelled", format_args!("reason=user"));
                 self.scan = None;
                 self.status = "Search stopped.".into();
+            } else if applying {
+                event("apply.cancelled", format_args!("reason=user"));
+                self.reset_apply();
+                self.status = "Apply cancelled.".into();
             } else {
                 self.start_find(context);
             }

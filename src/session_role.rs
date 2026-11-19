@@ -207,6 +207,23 @@ fn read_scan_chunk(memory: &impl Memory, start: usize, bytes: &mut [u8]) -> io::
 }
 
 pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role)> {
+    use windows_sys::Win32::Foundation::ERROR_PARTIAL_COPY;
+
+    loop {
+        match scan_role(reader, cancel) {
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_PARTIAL_COPY as i32)
+                    && !cancel.load(Ordering::Acquire) =>
+            {
+                event("apply.session_retry", format_args!("partial_read: {error}"));
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            result => return result,
+        }
+    }
+}
+
+fn scan_role(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role)> {
     let deadline = Instant::now() + Duration::from_secs(40);
     let mut found = None;
     let mut buffer = vec![0; 1024 * 1024 + 136];
@@ -225,12 +242,14 @@ pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role
             }
             let length = buffer.len().min(region.end - start);
             let raw = &mut buffer[..length];
-            read_scan_chunk(reader, start, raw).map_err(|error| {
-                io::Error::other(format!("Session scan was incomplete: {error}"))
-            })?;
-            for offset in (0..length.saturating_sub(131).min(1024 * 1024)).step_by(8) {
-                if raw[offset + 8] != 8
-                    || raw[offset + 128] != 5
+            read_scan_chunk(reader, start, raw)?;
+            let candidates = length.saturating_sub(131).min(1024 * 1024);
+            if candidates == 0 {
+                continue;
+            }
+            // Search for the one-byte Lua thread tag before reading candidate headers.
+            for offset in memchr::memchr_iter(8, &raw[8..8 + candidates]) {
+                if !offset.is_multiple_of(8)
                     || tag(raw, offset + 128) != 5
                     || !pointer(word(raw, offset + 32))
                     || !pointer(word(raw, offset + 120))

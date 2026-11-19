@@ -1744,6 +1744,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "iced-x86",
+ "memchr",
  "png",
  "rfd",
  "serde",
