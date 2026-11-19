@@ -98,12 +98,14 @@ pub struct TrainerApp {
     next_auto: Instant,
     auto_failures: u8,
     role_lease: Option<RoleProof>,
+    cached_role: Option<RoleProof>,
     field_issues: std::collections::BTreeMap<&'static str, String>,
     snapshot: Option<Snapshot>,
     status: String,
     error: Option<String>,
     show_details: bool,
     selected: usize,
+    stat_column_widths: Option<[f32; 5]>,
     logo: Option<egui::TextureHandle>,
     update_result: Option<Receiver<io::Result<update::ReleaseStatus>>>,
     update_status: String,
@@ -230,11 +232,13 @@ impl TrainerApp {
             next_auto: Instant::now(),
             auto_failures: 0,
             role_lease: None,
+            cached_role: None,
             field_issues: Default::default(),
             snapshot: None,
             status: "Start Reborn to find a character.".into(),
             show_details: false,
             selected: 0,
+            stat_column_widths: None,
             logo,
             update_result: Some(task(&context.egui_ctx, || update::check(VERSION))),
             update_status: "Checking…".into(),
@@ -259,6 +263,7 @@ impl TrainerApp {
                 event("hunt.cancelled", format_args!("reason=connection_changed"));
             }
             self.session = session;
+            self.cached_role = None;
             self.scan = None;
             self.stop_auto();
             self.snapshot = None;
@@ -416,6 +421,7 @@ impl TrainerApp {
                         snapshot.values = result.values;
                     }
                     self.role_lease = Some(result.lease);
+                    self.cached_role = Some(result.lease);
                     self.field_issues = result.skipped;
                     let count = result.applied;
                     let warning = self.field_issues.len();
@@ -438,6 +444,7 @@ impl TrainerApp {
                 }
                 Err(error) => {
                     event("apply.failed", format_args!("{error}"));
+                    self.cached_role = None;
                     self.auto_failures += 1;
                     if self.auto_active
                         && self.auto_failures <= 2
@@ -591,7 +598,7 @@ impl TrainerApp {
         };
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
-        let lease = self.role_lease;
+        let lease = self.role_lease.or(self.cached_role);
         if lease.is_none() && self.auto_failures == 0 {
             self.status = "Checking whether the session is solo or hosted…".into();
         }
@@ -707,8 +714,9 @@ impl TrainerApp {
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut status =
-                    RichText::new(format!("{VERSION} - {}", self.update_status)).small();
+                let mut status = RichText::new(format!("{VERSION} - {}", self.update_status))
+                    .size(16.0)
+                    .strong();
                 if self.update_status == "Update Available" {
                     let seconds = context.input(|input| input.time);
                     let glow = ((seconds * std::f64::consts::TAU / 5.0).cos() + 1.0) * 0.5;
@@ -733,6 +741,11 @@ impl TrainerApp {
                     response.on_hover_text(error);
                 }
             });
+            if self.update_result.is_some() || self.install_result.is_some() {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                    ui.allocate_ui(egui::vec2(180.0, 8.0), Self::work_progress);
+                });
+            }
         });
     }
 
@@ -789,30 +802,63 @@ impl TrainerApp {
     }
 
     fn stats_table(&mut self, ui: &mut egui::Ui, width: f32) {
-        let stat_width = (width - 415.0).max(125.0);
-        let columns = [
-            ("Enabled", 76.0, 68.0),
-            ("Stat", stat_width, 100.0),
-            ("Current", 88.0, 62.0),
-            ("Target", 102.0, 59.0),
-            ("Status", 117.0, 68.0),
-        ];
+        let titles = ["Enabled", "Stat", "Current", "Target", "Status"];
+        let minimums = [68.0, 100.0, 62.0, 59.0, 68.0];
+        let spacing = ui.spacing().item_spacing.x * (titles.len() - 1) as f32;
+        let mut widths = *self.stat_column_widths.get_or_insert_with(|| {
+            [
+                76.0,
+                (width - spacing - 383.0).max(100.0),
+                88.0,
+                102.0,
+                117.0,
+            ]
+        });
         ui.spacing_mut().item_spacing.y = 2.0;
         let mut selected = self.selected;
         let mut preferences_changed = false;
+        let mut resize = None;
         let mut table = TableBuilder::new(ui)
             .striped(true)
-            .resizable(true)
             .sense(egui::Sense::click())
             .auto_shrink([false, false]);
-        for (_, width, minimum) in columns {
-            table = table.column(Column::initial(width).at_least(minimum).clip(true));
+        for width in widths {
+            table = table.column(Column::exact(width));
         }
         table
             .header(31.0, |mut header| {
-                for (title, _, _) in columns {
+                for (index, title) in titles.into_iter().enumerate() {
                     header.col(|ui| {
-                        ui.strong(title);
+                        let cell = ui.max_rect();
+                        if index + 1 < titles.len() {
+                            let handle = egui::Rect::from_min_max(
+                                egui::pos2(cell.right() - 9.0, cell.top()),
+                                cell.right_bottom(),
+                            );
+                            let response = ui.interact(
+                                handle,
+                                ui.id().with(("stat-column-resize", index)),
+                                egui::Sense::drag(),
+                            );
+                            if response.hovered() || response.dragged() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
+                            }
+                            if response.dragged() {
+                                resize = Some((index, response.drag_delta().x));
+                                ui.ctx().request_repaint();
+                            }
+                            let color = if response.hovered() || response.dragged() {
+                                ACCENT
+                            } else {
+                                MUTED
+                            };
+                            ui.painter().vline(
+                                handle.center().x,
+                                handle.y_range().shrink(5.0),
+                                egui::Stroke::new(1.0, color),
+                            );
+                        }
+                        ui.add(egui::Label::new(RichText::new(title).strong()).truncate());
                     });
                 }
             })
@@ -836,7 +882,7 @@ impl TrainerApp {
                     } else if self.scan.is_some() {
                         "Searching"
                     } else {
-                        "Not found"
+                        "—"
                     };
                     body.row(29.0, |mut row| {
                         row.set_selected(index == self.selected);
@@ -877,6 +923,15 @@ impl TrainerApp {
                     });
                 }
             });
+        if let Some((index, delta)) = resize {
+            let delta = delta.clamp(
+                (minimums[index] - widths[index]).min(0.0),
+                (widths[index + 1] - minimums[index + 1]).max(0.0),
+            );
+            widths[index] += delta;
+            widths[index + 1] -= delta;
+            self.stat_column_widths = Some(widths);
+        }
         if self.selected != selected && self.commit_target() {
             self.selected = selected;
             self.target_entry = self.targets[selected].to_string();
@@ -886,23 +941,21 @@ impl TrainerApp {
         }
     }
 
-    fn search_progress(&self, ui: &mut egui::Ui) {
+    fn work_progress(ui: &mut egui::Ui) {
+        let time = ui.input(|input| input.time) as f32;
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 4, SURFACE);
-        if let Some(scan) = &self.scan {
-            let elapsed = scan.started.elapsed().as_secs_f32();
-            let width = rect.width() * 0.32;
-            let phase = (elapsed * 0.45).fract() * 2.0;
-            let progress = if phase < 1.0 { phase } else { 2.0 - phase };
-            let left = rect.left() + progress * (rect.width() - width);
-            let fill = egui::Rect::from_min_size(
-                egui::pos2(left, rect.top()),
-                egui::vec2(width, rect.height()),
-            );
-            ui.painter().rect_filled(fill, 4, ACCENT);
-            ui.ctx().request_repaint_after(Duration::from_millis(35));
-        }
+        let width = rect.width() * 0.32;
+        let phase = (time * 0.45).fract() * 2.0;
+        let progress = if phase < 1.0 { phase } else { 2.0 - phase };
+        let left = rect.left() + progress * (rect.width() - width);
+        let fill = egui::Rect::from_min_size(
+            egui::pos2(left, rect.top()),
+            egui::vec2(width, rect.height()),
+        );
+        ui.painter().rect_filled(fill, 4, ACCENT);
+        ui.ctx().request_repaint_after(Duration::from_millis(35));
     }
 
     fn stat_editor(&mut self, context: &egui::Context, ui: &mut egui::Ui) {
@@ -948,7 +1001,9 @@ impl TrainerApp {
                 self.next_auto = Instant::now();
             }
         }
-        self.search_progress(ui);
+        if self.scan.is_some() || self.apply.is_some() {
+            Self::work_progress(ui);
+        }
         ui.colored_label(MINT, &self.status);
         if let Some(scan) = &self.scan {
             let elapsed = scan.started.elapsed().as_secs();
@@ -1058,13 +1113,24 @@ impl eframe::App for TrainerApp {
                             .strong(),
                     );
                 });
-                if let Some(session) = &self.session {
-                    ui.label(RichText::new(format!("Connected · PID {}", session.pid)).color(MINT));
-                } else if self.running {
-                    ui.label("Reborn is running. The process could not be uniquely selected.");
-                } else {
-                    ui.label("Waiting for Reborn.");
-                }
+                ui.vertical(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(session) = &self.session {
+                            ui.colored_label(MINT, format!("Connected · PID {}", session.pid));
+                        } else if self.running {
+                            ui.label(
+                                "Reborn is running. The process could not be uniquely selected.",
+                            );
+                        } else {
+                            ui.label("Waiting for Reborn.");
+                        }
+                    });
+                    if self.launch_result.is_some() || self.stop_result.is_some() {
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                            ui.allocate_ui(egui::vec2(220.0, 8.0), Self::work_progress);
+                        });
+                    }
+                });
                 if let Some(error) = &self.error {
                     ui.colored_label(Color32::LIGHT_RED, error);
                 }

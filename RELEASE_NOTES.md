@@ -1,8 +1,7 @@
-Azeroth Survivor Reborn Trainer v1.0.1
+Azeroth Survivor Reborn Trainer v1.0.2
 
-- Wait for the replacement trainer to confirm UI initialization during updates and restore the previous EXE if startup fails.
-- Pause and retry temporary freeze verification failures. Incomplete role scans keep writes paused.
-- Include the detected build in Hunt diagnostics and show which build supports writes.
-- Recover from malformed settings while preserving the original file.
-- Rotate the background log at 4 MiB and retain one previous log.
-- Stat writes still support game build ab1d6c071b56.
+- Use a fixed-size window with a larger footer version label and right-aligned game status.
+- Drag the visible table header dividers to resize columns. Unavailable stats show a dash.
+- Show progress while searching, applying stats, starting or stopping the game, and updating.
+- Revalidate a cached session proof for repeat searches on the same game process.
+- Hunt accepts multiple discovery routines that agree on the player layout. Stat writes require a verified layout and solo or host session.

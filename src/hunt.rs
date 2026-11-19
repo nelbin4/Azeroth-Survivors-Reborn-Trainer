@@ -267,7 +267,7 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
     let (text_rva, text) = text_section(blob).ok_or_else(|| {
         io::Error::other("Expected a Windows x64 game image with one code section.")
     })?;
-    let mut arrays = Vec::new();
+    let mut arrays: BTreeMap<(Array, usize), Vec<Guard>> = BTreeMap::new();
     let mut checks: BTreeMap<(Array, usize), Vec<Guard>> = BTreeMap::new();
     let mut drops: BTreeMap<(Array, usize), Vec<Guard>> = BTreeMap::new();
     for (offset, prefix) in text.windows(3).enumerate() {
@@ -285,7 +285,10 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
         let tail: Vec<_> = decoder.collect();
         let guard = |end: u64| (start, bytes[..end as usize - start].to_vec());
         if let Some(stat) = tail.get(..4).and_then(|v| vector_offset(root, v, &head[3])) {
-            arrays.push((root.array, stat, guard(tail[3].next_ip())));
+            arrays
+                .entry((root.array, stat))
+                .or_default()
+                .push(guard(tail[3].next_ip()));
         }
         if let Some(name) = tail.first().and_then(|i| name_check(root, i)) {
             checks
@@ -300,16 +303,17 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
                 .push(guard(tail[6].next_ip()));
         }
     }
-    let [(array, stats, primary)] = arrays.as_slice() else {
+    if arrays.len() != 1 {
         return Err(io::Error::other(format!(
-            "Player array unavailable. Expected one stat serializer, found {}.",
+            "Player array unavailable. Expected one consistent layout, found {}.",
             arrays.len()
         )));
-    };
+    }
+    let ((array, stats), primary) = arrays.into_iter().next().unwrap();
     let names: Vec<_> = checks
         .iter()
         .filter_map(|(&(owner, name), guard)| {
-            (owner == *array && (0x160..=array[3] - 24).contains(&name) && name.is_multiple_of(8))
+            (owner == array && (0x160..=array[3] - 24).contains(&name) && name.is_multiple_of(8))
                 .then(|| drops.get(&(owner, name)).map(|drop| (name, guard, drop)))
                 .flatten()
         })
@@ -319,7 +323,8 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
             "Player identity unavailable. The character routines did not identify one field.",
         ));
     };
-    let guards = std::iter::once(primary.clone())
+    let guards = primary
+        .into_iter()
         .chain(check.iter().cloned())
         .chain(drop.iter().cloned())
         .collect();
@@ -327,9 +332,9 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
     Ok(Plan {
         build: digest[..12].into(),
         digest,
-        array: *array,
+        array,
         name: *name,
-        stats: *stats,
+        stats,
         guards,
     })
 }
@@ -729,10 +734,11 @@ pub fn apply_stats(
     }
     cancelled(cancel)?;
     let reader = Reader::open(&proof.session)?;
-    let (lease, role) = match lease {
-        Some(lease) => (lease, lease.read(&reader)?),
-        None => session_role::find(&reader, cancel)?,
-    };
+    let (lease, role) =
+        match lease.and_then(|lease| lease.read(&reader).ok().map(|role| (lease, role))) {
+            Some(verified) => verified,
+            None => session_role::find(&reader, cancel)?,
+        };
     if !permits(role, proof.count) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
