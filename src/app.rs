@@ -693,9 +693,9 @@ impl TrainerApp {
     }
 
     fn stats_table(&mut self, ui: &mut egui::Ui, width: f32) {
-        let stat_width = (width - 403.0).max(125.0);
+        let stat_width = (width - 415.0).max(125.0);
         let columns = [
-            ("Freeze", 64.0, 56.0),
+            ("Enabled", 76.0, 68.0),
             ("Stat", stat_width, 100.0),
             ("Current", 88.0, 62.0),
             ("Target", 102.0, 59.0),

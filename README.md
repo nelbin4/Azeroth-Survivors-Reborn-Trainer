@@ -10,7 +10,8 @@ The `codex/rust-migration` branch contains the Rust source for **0.9.9b**.
 GitHub Actions builds the test EXE. Download **Reborn-Rust-0.9.9b-Windows-x64**
 from a successful [Rust preview run](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/actions/workflows/rust-preview.yml),
 extract the Actions archive, and launch the EXE. On game build
-`ab1d6c071b56`, **Find** applies and holds your checked targets in a
+`ab1d6c071b56`, **Find** applies and holds the configured targets for stats
+checked in the **Enabled** column in a
 verified solo or co-op host session. **Stop Freeze** stops automatic writes.
 Unchecked stats can be changed once with **Apply**. Echo requires the active
 effect and Current health follows verified maximum health. Co-op guests
