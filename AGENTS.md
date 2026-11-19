@@ -1,6 +1,9 @@
 # Trainer releases
 
 The first stable, fully Rust trainer release is `1.0.0` (Git tag `v1.0.0`).
+Build the Rust test preview as `0.9.9b` (`0.9.9-beta` in Cargo). Keep it on
+the migration branch as a GitHub Actions artifact. Wait for the user's explicit
+approval before changing the preview version or publishing `v1.0.0`.
 For routine releases, increment the patch number from 0 through 9. After patch
 9, increment the minor number and reset the patch to 0. For example, release
 `1.1.0` after `1.0.9`.

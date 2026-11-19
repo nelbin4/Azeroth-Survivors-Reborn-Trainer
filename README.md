@@ -4,6 +4,15 @@ Portable Windows trainer for [Azeroth Survivors: Reborn](https://azreborn.com/).
 Find adjusts verified stats for your selected character in solo runs and
 verified co-op host sessions.
 
+## Rust test preview
+
+The `codex/rust-migration` branch contains the Rust source for **0.9.9b**.
+GitHub Actions builds the test EXE. Download **Reborn-Rust-0.9.9b-Windows-x64**
+from a successful [Rust preview run](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/actions/workflows/rust-preview.yml),
+extract the Actions archive, and launch the EXE. Find and Detection details
+are read-only in this preview. The stable release instructions below still
+apply to the Python trainer.
+
 ## Quick start
 
 1. Download and extract the portable ZIP, then open **Azeroth Survivor Reborn Trainer.exe**. [Latest release](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases/latest)

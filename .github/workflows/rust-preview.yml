@@ -44,6 +44,6 @@ jobs:
           Get-FileHash -Algorithm SHA256 -LiteralPath $exe | Format-List -Property Hash
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: Reborn-Rust-Preview-Windows-x64
+          name: Reborn-Rust-0.9.9b-Windows-x64
           path: preview/Azeroth.Survivor.Reborn.Trainer.exe
           if-no-files-found: error

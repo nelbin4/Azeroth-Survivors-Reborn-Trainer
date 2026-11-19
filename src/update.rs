@@ -65,7 +65,7 @@ fn from_response(release: Release, current: &str) -> io::Result<ReleaseStatus> {
         version(&release.tag_name).ok_or_else(|| io::Error::other("Invalid release version."))?;
     Ok(ReleaseStatus {
         tag: release.tag_name,
-        available: stable > installed || (stable == installed && !prerelease.is_empty()),
+        available: prerelease.is_empty() && stable > installed,
     })
 }
 
@@ -84,12 +84,12 @@ mod tests {
     #[test]
     fn existing_release_does_not_replace_rust_preview_with_python() {
         assert!(
-            !from_response(stable("v0.9.19"), "1.0.0-alpha.1")
+            !from_response(stable("v0.9.19"), "0.9.9-beta")
                 .unwrap()
                 .available
         );
         assert!(
-            from_response(stable("v1.0.0"), "1.0.0-alpha.1")
+            !from_response(stable("v1.0.0"), "0.9.9-beta")
                 .unwrap()
                 .available
         );

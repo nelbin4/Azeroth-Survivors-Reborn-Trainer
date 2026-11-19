@@ -25,6 +25,13 @@ const MINT: Color32 = Color32::from_rgb(114, 224, 190);
 const FRAME: Color32 = Color32::from_rgb(20, 32, 44);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+fn display_version() -> String {
+    match VERSION.strip_suffix("-beta") {
+        Some(base) => format!("{base}b"),
+        None => format!("v{VERSION}"),
+    }
+}
+
 pub fn icon() -> io::Result<egui::IconData> {
     let image = include_bytes!("../assets/trainer-logo.png");
     let mut reader = png::Decoder::new(Cursor::new(image))
@@ -300,7 +307,7 @@ impl TrainerApp {
                         }
                     });
                     ui.label(
-                        RichText::new(format!("v{VERSION} · {}", self.update_status))
+                        RichText::new(format!("{} · {}", display_version(), self.update_status))
                             .small()
                             .color(MINT),
                     );
