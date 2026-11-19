@@ -124,7 +124,7 @@ fn lookup(memory: &impl Memory, address: usize, key: &[u8]) -> io::Result<(usize
     if node != 0 || table(memory, address)? != layout {
         return Err(io::Error::other("Lua table changed during lookup."));
     }
-    found.ok_or_else(|| io::Error::other("Expected Lua key was not found."))
+    found.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Expected Lua key was not found."))
 }
 
 fn rooted_globals(memory: &impl Memory, state: usize) -> io::Result<usize> {
@@ -188,7 +188,7 @@ pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role
     let deadline = Instant::now() + Duration::from_secs(40);
     let mut found = None;
     let mut buffer = vec![0; 1024 * 1024 + 136];
-    for region in reader.private_regions() {
+    for region in reader.private_regions()? {
         for start in (region.start..region.end).step_by(1024 * 1024) {
             if cancel.load(Ordering::Acquire) {
                 return Err(io::Error::new(
@@ -198,14 +198,14 @@ pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role
             }
             if Instant::now() >= deadline {
                 return Err(io::Error::other(
-                    "Solo verification timed out. Try Apply again.",
+                    "Session verification timed out. Try Find again.",
                 ));
             }
             let length = buffer.len().min(region.end - start);
             let raw = &mut buffer[..length];
-            if reader.read(start, raw).is_err() {
-                continue;
-            }
+            reader.read(start, raw).map_err(|error| {
+                io::Error::other(format!("Session scan was incomplete: {error}"))
+            })?;
             for offset in (0..length.saturating_sub(131).min(1024 * 1024)).step_by(8) {
                 if raw[offset + 8] != 8
                     || raw[offset + 128] != 5
@@ -219,8 +219,10 @@ pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role
                 let Ok(globals) = rooted_globals(reader, state) else {
                     continue;
                 };
-                if lookup(reader, globals, b"AZS_RUN_LOBBY").is_err() {
-                    continue;
+                match lookup(reader, globals, b"AZS_RUN_LOBBY") {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
                 }
                 if found.is_some() {
                     return Err(io::Error::other(
@@ -231,7 +233,7 @@ pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role
             }
         }
     }
-    let proof = found.ok_or_else(|| io::Error::other("Solo session could not be verified."))?;
+    let proof = found.ok_or_else(|| io::Error::other("Session role could not be verified."))?;
     let role = proof.read(reader)?;
     event("apply.session_verified", format_args!("role={role:?}"));
     Ok((proof, role))

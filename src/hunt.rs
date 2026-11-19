@@ -439,7 +439,13 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
         "hunt.analyzing_image",
         format_args!("game_pid={}", session.pid),
     );
-    let plan = analyze(&bytes, stop)?;
+    let plan = analyze(&bytes, stop).map_err(|error| {
+        if error.kind() == io::ErrorKind::Interrupted {
+            return error;
+        }
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        io::Error::new(error.kind(), format!("Build {}: {error}", &digest[..12]))
+    })?;
     event(
         "hunt.plan_ready",
         format_args!(
@@ -645,7 +651,8 @@ impl VerifiedStats {
     fn verify_owner(&self, reader: &Reader, base: usize) -> io::Result<[u8; 24]> {
         let current = fs::metadata(&self.session.path)?;
         if self.stamp.1.is_none() || (current.len(), current.modified().ok()) != self.stamp {
-            return Err(io::Error::other(
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "Game executable changed. Click Find again.",
             ));
         }
@@ -653,7 +660,8 @@ impl VerifiedStats {
             let mut bytes = vec![0; expected.len()];
             reader.read(base + rva, &mut bytes)?;
             if bytes != *expected {
-                return Err(io::Error::other(
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
                     "Player identity code changed. Click Find again.",
                 ));
             }
@@ -668,7 +676,8 @@ impl VerifiedStats {
                 && character.count == self.count
                 && character.index == self.index
         }) {
-            return Err(io::Error::other(
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "Selected character changed. Click Find again.",
             ));
         }
@@ -692,12 +701,14 @@ impl VerifiedStats {
             || usize::from_le_bytes(identity) != self.identity
             || usize::from_le_bytes(index) != self.index
         {
-            return Err(io::Error::other(
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
                 "Selected character changed. Click Find again.",
             ));
         }
         if !permits(lease.read(reader)?, self.count) {
-            return Err(io::Error::other(
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
                 "Session authority changed. Stat writes stopped.",
             ));
         }
@@ -723,7 +734,8 @@ pub fn apply_stats(
         None => session_role::find(&reader, cancel)?,
     };
     if !permits(role, proof.count) {
-        return Err(io::Error::other(
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
             "Stat changes require a verified solo or co-op host session.",
         ));
     }

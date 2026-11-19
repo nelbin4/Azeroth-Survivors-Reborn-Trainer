@@ -2,7 +2,7 @@ use std::{
     fmt,
     fs::{self, OpenOptions},
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
         atomic::{AtomicUsize, Ordering},
@@ -10,6 +10,8 @@ use std::{
     },
     thread::{self, JoinHandle},
 };
+
+const LOG_LIMIT: u64 = 4 * 1024 * 1024;
 
 enum Message {
     Event(&'static str, String),
@@ -96,12 +98,18 @@ fn write_file(
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)?;
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.with_extension("lock"))?;
     let pid = std::process::id();
-    let mut append = |name, details: &str| -> io::Result<()> {
+    let append = |name, details: &str| -> io::Result<()> {
         let details = details.replace('\r', "\\r").replace('\n', "\\n");
         let line = format!("{} pid={pid} {name} {details}\n", timestamp());
-        file.write_all(line.as_bytes())
+        lock.lock()?;
+        let result = append_line(&path, line.as_bytes(), LOG_LIMIT);
+        result.and(lock.unlock())
     };
 
     while let Ok(message) = receiver.recv() {
@@ -117,10 +125,42 @@ fn write_file(
     Ok(())
 }
 
+fn append_line(path: &Path, line: &[u8], limit: u64) -> io::Result<()> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.len() + line.len() as u64 > limit => {
+            fs::rename(path, path.with_extension("previous.log"))?;
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(line)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn keeps_only_the_latest_previous_log() {
+        let path = std::env::temp_dir().join(format!(
+            "reborn-log-rotation-test-{}.log",
+            std::process::id()
+        ));
+        let previous = path.with_extension("previous.log");
+        append_line(&path, b"first\n", 8).unwrap();
+        append_line(&path, b"second\n", 8).unwrap();
+        append_line(&path, b"third\n", 8).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"third\n");
+        assert_eq!(fs::read(&previous).unwrap(), b"second\n");
+        fs::remove_file(path).unwrap();
+        fs::remove_file(previous).unwrap();
+    }
 
     #[test]
     fn appends_single_lines_that_are_visible_while_running() {
@@ -143,6 +183,7 @@ mod tests {
         log.sender.write("app.exit", format_args!("ok"));
         drop(log);
         assert!(fs::read_to_string(&path).unwrap().contains("app.exit ok"));
+        fs::remove_file(path.with_extension("lock")).unwrap();
         fs::remove_file(path).unwrap();
     }
 }

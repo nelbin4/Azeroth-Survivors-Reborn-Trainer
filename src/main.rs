@@ -20,6 +20,9 @@ fn main() -> eframe::Result {
         app::icon().expect("embedded trainer icon should decode");
         let core = env!("CARGO_PKG_VERSION").split('-').next().unwrap();
         update::version(core).expect("trainer package version should be valid");
+        if let Some(ready) = arguments.next() {
+            update::confirm_ready(std::path::Path::new(&ready)).expect("smoke startup marker");
+        }
         return Ok(());
     }
     let _log = settings::state_directory()
@@ -76,6 +79,10 @@ fn main() -> eframe::Result {
         diagnostic_log::event("app.panic", format_args!("{details}"));
         default_panic(details);
     }));
+    let update_ready = argument
+        .filter(|value| value == "--update-ready")
+        .and_then(|_| arguments.next())
+        .map(std::path::PathBuf::from);
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size([1010.0, 810.0])
         .with_min_inner_size([940.0, 720.0]);
@@ -88,7 +95,7 @@ fn main() -> eframe::Result {
             viewport,
             ..Default::default()
         },
-        Box::new(|context| Ok(Box::new(app::TrainerApp::new(context)))),
+        Box::new(move |context| Ok(Box::new(app::TrainerApp::new(context, update_ready)))),
     );
     match &result {
         Ok(()) => diagnostic_log::event("app.exit", format_args!("ok")),

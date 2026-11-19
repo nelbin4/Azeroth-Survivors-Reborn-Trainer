@@ -340,14 +340,20 @@ impl Reader {
         Ok(stacks)
     }
 
-    pub fn private_regions(&self) -> Vec<std::ops::Range<usize>> {
-        use windows_sys::Win32::System::Memory::{
-            MEM_COMMIT, MEM_PRIVATE, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS,
-            VirtualQueryEx,
+    pub fn private_regions(&self) -> io::Result<Vec<std::ops::Range<usize>>> {
+        use windows_sys::Win32::System::{
+            Memory::{
+                MEM_COMMIT, MEM_PRIVATE, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS,
+                VirtualQueryEx,
+            },
+            SystemInformation::{GetNativeSystemInfo, SYSTEM_INFO},
         };
-        let mut address = 0x10000usize;
-        let mut regions = Vec::new();
-        while address < 0x7fff_ffff_f000 {
+        let mut system = SYSTEM_INFO::default();
+        unsafe { GetNativeSystemInfo(&mut system) };
+        let mut address = system.lpMinimumApplicationAddress as usize;
+        let limit = system.lpMaximumApplicationAddress as usize + 1;
+        let mut regions: Vec<std::ops::Range<usize>> = Vec::new();
+        while address < limit {
             let mut info = MEMORY_BASIC_INFORMATION::default();
             if unsafe {
                 VirtualQueryEx(
@@ -358,24 +364,27 @@ impl Reader {
                 )
             } == 0
             {
-                break;
+                return Err(io::Error::last_os_error());
             }
             let start = info.BaseAddress as usize;
-            let Some(end) = start.checked_add(info.RegionSize) else {
-                break;
-            };
-            if end <= address {
-                break;
-            }
+            let end = start
+                .checked_add(info.RegionSize)
+                .filter(|end| *end > address)
+                .ok_or_else(|| io::Error::other("Invalid memory region bounds."))?;
             if info.State == MEM_COMMIT
                 && info.Type == MEM_PRIVATE
                 && info.Protect & (PAGE_GUARD | PAGE_NOACCESS) == 0
             {
-                regions.push(start.max(address)..end);
+                let start = start.max(address);
+                let end = end.min(limit);
+                match regions.last_mut() {
+                    Some(previous) if previous.end == start => previous.end = end,
+                    _ => regions.push(start..end),
+                }
             }
             address = end;
         }
-        regions
+        Ok(regions)
     }
 
     fn stack(&self, pid: u32, tid: u32) -> Option<std::ops::Range<usize>> {

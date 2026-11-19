@@ -19,6 +19,7 @@ pub fn state_directory() -> io::Result<PathBuf> {
 pub struct Settings {
     path: Option<PathBuf>,
     fields: Map<String, Value>,
+    pub recovery_notice: Option<String>,
 }
 
 impl Settings {
@@ -29,23 +30,43 @@ impl Settings {
     }
 
     fn from_paths(path: PathBuf, legacy: &Path) -> io::Result<Self> {
+        let mut imported = false;
         let text = match fs::read(&path) {
             Ok(text) => Some(text),
             Err(err) if err.kind() == io::ErrorKind::NotFound => match fs::read(legacy) {
-                Ok(text) => Some(text),
+                Ok(text) => {
+                    imported = true;
+                    Some(text)
+                }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => None,
                 Err(err) => return Err(err),
             },
             Err(err) => return Err(err),
         };
-        let fields = text
-            .as_deref()
-            .map(serde_json::from_slice)
-            .transpose()?
-            .unwrap_or_default();
+        let fields = text.as_deref().map(serde_json::from_slice).transpose();
+        let (fields, recovery_notice) = match fields {
+            Ok(fields) => (fields.unwrap_or_default(), None),
+            Err(_) => {
+                if !imported {
+                    let stamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(io::Error::other)?
+                        .as_nanos();
+                    fs::rename(&path, path.with_extension(format!("invalid-{stamp}.json")))?;
+                }
+                (
+                    Map::new(),
+                    Some(
+                        "Settings were invalid. Defaults loaded and the original was preserved."
+                            .into(),
+                    ),
+                )
+            }
+        };
         Ok(Self {
             path: Some(path),
             fields,
+            recovery_notice,
         })
     }
 
@@ -93,6 +114,35 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_settings_are_preserved_and_can_be_replaced() {
+        let folder = std::env::temp_dir().join(format!(
+            "reborn-settings-recovery-test-{}",
+            std::process::id()
+        ));
+        let current = folder.join(FILE);
+        let legacy = folder.join("legacy.json");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(&current, b"{broken").unwrap();
+        let mut settings = Settings::from_paths(current.clone(), &legacy).unwrap();
+        assert!(settings.recovery_notice.is_some());
+        assert!(!current.exists());
+        let backup = fs::read_dir(&folder).unwrap().next().unwrap().unwrap();
+        assert_eq!(fs::read(backup.path()).unwrap(), b"{broken");
+        settings
+            .set_stat_preferences(serde_json::json!({}))
+            .unwrap();
+        assert!(
+            Settings::from_paths(current.clone(), &legacy)
+                .unwrap()
+                .stat_preferences()
+                .is_some()
+        );
+        fs::remove_file(backup.path()).unwrap();
+        fs::remove_file(current).unwrap();
+        fs::remove_dir(folder).unwrap();
+    }
 
     #[test]
     fn imports_legacy_settings_and_preserves_unrelated_preferences() {

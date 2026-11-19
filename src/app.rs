@@ -96,6 +96,7 @@ pub struct TrainerApp {
     target_entry: String,
     auto_active: bool,
     next_auto: Instant,
+    auto_failures: u8,
     role_lease: Option<RoleProof>,
     field_issues: std::collections::BTreeMap<&'static str, String>,
     snapshot: Option<Snapshot>,
@@ -111,6 +112,7 @@ pub struct TrainerApp {
     manual_update_check: bool,
     using_latest_until: Option<Instant>,
     install_result: Option<Receiver<io::Result<()>>>,
+    update_ready: Option<PathBuf>,
 }
 
 fn update_button_row(ui: &mut egui::Ui, buttons: impl FnOnce(&mut egui::Ui)) {
@@ -157,7 +159,7 @@ fn finished<T>(receiver: &mut Option<Receiver<io::Result<T>>>) -> Option<io::Res
 }
 
 impl TrainerApp {
-    pub fn new(context: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(context: &eframe::CreationContext<'_>, update_ready: Option<PathBuf>) -> Self {
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = FRAME;
         visuals.window_fill = FRAME;
@@ -195,7 +197,11 @@ impl TrainerApp {
                     "settings.loaded",
                     format_args!("saved_game_path={}", settings.game_path().is_some()),
                 );
-                (settings, None)
+                let notice = settings.recovery_notice.clone();
+                if let Some(notice) = &notice {
+                    event("settings.recovered", format_args!("{notice}"));
+                }
+                (settings, notice)
             }
             Err(error) => {
                 event("settings.load_failed", format_args!("{error}"));
@@ -222,6 +228,7 @@ impl TrainerApp {
             target_entry: targets[0].to_string(),
             auto_active: false,
             next_auto: Instant::now(),
+            auto_failures: 0,
             role_lease: None,
             field_issues: Default::default(),
             snapshot: None,
@@ -236,6 +243,7 @@ impl TrainerApp {
             manual_update_check: false,
             using_latest_until: None,
             install_result: None,
+            update_ready,
         }
     }
 
@@ -364,7 +372,11 @@ impl TrainerApp {
                                 "Character verified. Choose a stat to apply.".into()
                             }
                         } else if snapshot.character.is_some() {
-                            "Character found. This build is read-only.".into()
+                            format!(
+                                "Build {} is read-only. Stat writes are verified for {}.",
+                                snapshot.build,
+                                &crate::stat_fields::BUILD[..12]
+                            )
                         } else {
                             "No live character verified. Start a run and retry.".into()
                         };
@@ -396,8 +408,10 @@ impl TrainerApp {
             })
         {
             let automatic = self.apply.take().unwrap().automatic;
+            self.next_auto = Instant::now() + Duration::from_secs(1);
             match outcome {
                 Ok(result) => {
+                    self.auto_failures = 0;
                     if let Some(snapshot) = &mut self.snapshot {
                         snapshot.values = result.values;
                     }
@@ -424,11 +438,25 @@ impl TrainerApp {
                 }
                 Err(error) => {
                     event("apply.failed", format_args!("{error}"));
-                    self.stop_auto();
-                    self.status = error.to_string();
+                    self.auto_failures += 1;
+                    if self.auto_active
+                        && self.auto_failures <= 2
+                        && !matches!(
+                            error.kind(),
+                            io::ErrorKind::PermissionDenied
+                                | io::ErrorKind::InvalidData
+                                | io::ErrorKind::Interrupted
+                        )
+                    {
+                        self.role_lease = None;
+                        self.next_auto = Instant::now() + Duration::from_secs(2);
+                        self.status = format!("Freeze paused. Rechecking session: {error}");
+                    } else {
+                        self.stop_auto();
+                        self.status = error.to_string();
+                    }
                 }
             }
-            self.next_auto = Instant::now() + Duration::from_secs(1);
         }
         if self.auto_active && self.apply.is_none() && Instant::now() >= self.next_auto {
             let targets = checked_targets(&self.enabled, &self.targets);
@@ -471,6 +499,7 @@ impl TrainerApp {
                 }
                 Err(error) => {
                     event("update.download_failed", format_args!("{error}"));
+                    self.update_asset = None;
                     self.update_status = "Update failed".into();
                     self.update_error = Some(error.to_string());
                 }
@@ -504,6 +533,7 @@ impl TrainerApp {
 
     fn stop_auto(&mut self) {
         self.auto_active = false;
+        self.auto_failures = 0;
         self.apply = None;
         self.role_lease = None;
         self.field_issues.clear();
@@ -562,7 +592,7 @@ impl TrainerApp {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let lease = self.role_lease;
-        if lease.is_none() {
+        if lease.is_none() && self.auto_failures == 0 {
             self.status = "Checking whether the session is solo or hosted…".into();
         }
         let result = task(context, move || {
@@ -1056,19 +1086,19 @@ impl eframe::App for TrainerApp {
                     });
             });
         self.stop_confirmation(context);
+        if let Some(ready) = self.update_ready.take()
+            && let Err(error) = update::confirm_ready(&ready)
+        {
+            event(
+                "update.startup_confirmation_failed",
+                format_args!("{error}"),
+            );
+        }
         if self.show_details {
             let text = self.diagnostic_text();
             egui::Window::new("Detection details")
                 .open(&mut self.show_details)
                 .show(context, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.strong("Detection details");
-                        ui.add_enabled(false, Button::new("Manual value search"))
-                            .on_disabled_hover_text(
-                                "Manual value search has not been ported to this preview.",
-                            );
-                    });
-                    ui.separator();
                     if ui.button("Copy details").clicked() {
                         event("diagnostics.copied", format_args!(""));
                         context.copy_text(text.clone());

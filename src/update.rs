@@ -22,6 +22,7 @@ const MAX_DOWNLOAD: u64 = 64 * 1024 * 1024;
 const HELPER: &str = "reborn-update.exe";
 const PAYLOAD: &str = "verified-update.exe";
 const COMPLETE: &str = "complete";
+const READY: &str = "ready";
 
 #[derive(Deserialize)]
 struct Release {
@@ -283,7 +284,7 @@ pub fn stage_and_launch(asset: &Asset) -> io::Result<()> {
 }
 
 fn discard_stage(stage: &Path) {
-    for file in [PAYLOAD, COMPLETE, HELPER] {
+    for file in [PAYLOAD, COMPLETE, HELPER, READY] {
         let _ = fs::remove_file(stage.join(file));
     }
     let _ = fs::remove_dir(stage);
@@ -309,36 +310,97 @@ pub fn cleanup() {
     }
 }
 
-fn reopen(target: &Path) -> io::Result<Child> {
+fn reopen(target: &Path, ready: Option<&Path>, smoke: Option<&str>) -> io::Result<Child> {
     let mut child = Command::new(target);
     child.current_dir(target.parent().expect("installer target has parent"));
-    if env::var_os("REBORN_UPDATE_SMOKE").is_some() {
+    if let Some(mode) = smoke {
         child.arg("--smoke-test");
+        if mode == "ready"
+            && let Some(ready) = ready
+        {
+            child.arg(ready);
+        }
+    } else if let Some(ready) = ready {
+        child.arg("--update-ready").arg(ready);
     }
     child.spawn()
 }
 
-fn replace_and_reopen(target: &Path, payload: &Path) -> io::Result<()> {
+pub fn confirm_ready(path: &Path) -> io::Result<()> {
+    let target = env::current_exe()?.canonicalize()?;
+    let stage = path.parent().and_then(|stage| stage.canonicalize().ok());
+    let stage = stage
+        .filter(|stage| {
+            stage
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("stage-"))
+                && stage.parent().and_then(Path::parent) == target.parent()
+                && stage
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|name| name == ".updates")
+                && path.file_name().is_some_and(|name| name == READY)
+        })
+        .ok_or_else(|| io::Error::other("Invalid update startup marker."))?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(stage.join(READY))?;
+    Ok(())
+}
+
+fn wait_until_ready(child: &mut Child, ready: &Path) -> io::Result<()> {
+    for _ in 0..80 {
+        if ready.try_exists()? {
+            return Ok(());
+        }
+        if child.try_wait()?.is_some() {
+            if ready.try_exists()? {
+                return Ok(());
+            }
+            return Err(io::Error::other(
+                "The updated trainer exited before startup.",
+            ));
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "The updated trainer did not finish starting.",
+    ))
+}
+
+fn replace_and_reopen(
+    target: &Path,
+    payload: &Path,
+    ready: &Path,
+    smoke: Option<&str>,
+) -> io::Result<()> {
     let backup = target.with_extension("previous.exe");
     fs::rename(target, &backup)?;
     let result = (|| -> io::Result<()> {
         fs::rename(payload, target)?;
-        let mut child = reopen(target)?;
-        for _ in 0..20 {
-            if let Some(status) = child.try_wait()? {
-                if !status.success() {
-                    return Err(io::Error::other("The updated trainer failed to start."));
-                }
-                break;
+        let mut child = reopen(target, Some(ready), smoke)?;
+        let startup = wait_until_ready(&mut child, ready);
+        if startup.is_err() {
+            if child.kill().is_ok() {
+                let _ = child.wait();
             }
-            thread::sleep(Duration::from_millis(250));
+        } else if smoke.is_some() {
+            child.wait()?;
         }
-        Ok(())
+        startup
     })();
-    if result.is_err() {
-        fs::rename(&backup, target)?;
+    if let Err(error) = result {
+        fs::rename(&backup, target).map_err(|restore| {
+            io::Error::other(format!(
+                "{error} Recovery from {} failed: {restore}",
+                backup.display()
+            ))
+        })?;
+        return Err(error);
     }
-    result
+    Ok(())
 }
 
 pub fn install(target: &Path, digest: &str, parent_pid: u32, created: u64) -> io::Result<()> {
@@ -356,15 +418,42 @@ pub fn install(target: &Path, digest: &str, parent_pid: u32, created: u64) -> io
             "Installer stage does not match the target folder.",
         ));
     }
-    process::wait_for_update_parent(parent_pid, created, &target)?;
+    if let Err(error) = process::wait_for_update_parent(parent_pid, created, &target) {
+        let _ = fs::write(stage.join(COMPLETE), b"");
+        return Err(error);
+    }
+    let smoke = (parent_pid == 0)
+        .then(|| env::var("REBORN_UPDATE_SMOKE").ok())
+        .flatten();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join(".updates").join("install.lock"))?;
+    lock.lock()?;
     let payload = stage.join(PAYLOAD);
-    let result = verify_file(&payload, digest).and_then(|()| replace_and_reopen(&target, &payload));
+    let result = if fs::read(&target)? == fs::read(&helper)? {
+        verify_file(&payload, digest).and_then(|()| {
+            replace_and_reopen(&target, &payload, &stage.join(READY), smoke.as_deref())
+        })
+    } else {
+        let _ = fs::write(stage.join(COMPLETE), b"");
+        return Err(io::Error::other(
+            "Another updater already changed the installed trainer.",
+        ));
+    };
     match &result {
         Ok(()) => event("update.installed", format_args!("sha256={digest}")),
         Err(error) => {
             event("update.install_failed", format_args!("{error}"));
             if target.is_file() {
-                let _ = reopen(&target);
+                match reopen(&target, None, smoke.as_deref()) {
+                    Ok(mut child) if smoke.is_some() => {
+                        let _ = child.wait();
+                    }
+                    Ok(_) => {}
+                    Err(error) => event("update.restart_failed", format_args!("{error}")),
+                }
             }
         }
     }
@@ -385,14 +474,24 @@ pub fn smoke_install() -> io::Result<()> {
     let digest = format!("{:x}", Sha256::digest(&updated));
     let helper = stage.join(HELPER);
     fs::copy(env::current_exe()?, &helper)?;
-    let status = Command::new(&helper)
-        .arg("--install-update")
-        .arg(&target)
-        .arg(&digest)
-        .args(["0", "0"])
-        .env("REBORN_UPDATE_SMOKE", "1")
-        .status()?;
-    if !status.success()
+    let run = |mode| {
+        Command::new(&helper)
+            .arg("--install-update")
+            .arg(&target)
+            .arg(&digest)
+            .args(["0", "0"])
+            .env("REBORN_UPDATE_SMOKE", mode)
+            .status()
+    };
+    if run("early-exit")?.success() || fs::read(&target)? != original {
+        return Err(io::Error::other(
+            "Updater did not restore the previous EXE.",
+        ));
+    }
+    fs::remove_file(stage.join(COMPLETE))?;
+    fs::write(stage.join(PAYLOAD), &updated)?;
+    if !run("ready")?.success()
+        || !stage.join(READY).is_file()
         || fs::read(&target)? != updated
         || fs::read(target.with_extension("previous.exe"))? != original
     {
@@ -403,6 +502,7 @@ pub fn smoke_install() -> io::Result<()> {
     discard_stage(&stage);
     fs::remove_file(target.with_extension("previous.exe"))?;
     fs::remove_file(target)?;
+    fs::remove_file(root.join(".updates").join("install.lock"))?;
     fs::remove_dir(root.join(".updates"))?;
     fs::remove_dir(root)?;
     Ok(())
