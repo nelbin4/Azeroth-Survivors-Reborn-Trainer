@@ -13,6 +13,14 @@ extract the Actions archive, and launch the EXE. Find and Detection details
 are read-only in this preview. The stable release instructions below still
 apply to the Python trainer.
 
+The preview appends timestamped diagnostics in the background to
+`%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-rust.log`. To watch the
+latest entries and follow new ones while the trainer is open, run:
+
+```powershell
+Get-Content -LiteralPath "$env:LOCALAPPDATA\Azeroth Survivor Reborn Trainer\reborn-rust.log" -Tail 40 -Wait
+```
+
 ## Quick start
 
 1. Download and extract the portable ZIP, then open **Azeroth Survivor Reborn Trainer.exe**. [Latest release](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases/latest)

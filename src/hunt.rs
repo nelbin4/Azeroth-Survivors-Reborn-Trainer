@@ -3,12 +3,16 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
     sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
 use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind, Register};
 use sha2::{Digest, Sha256};
 
-use crate::process::{Reader, Session};
+use crate::{
+    diagnostic_log::event,
+    process::{Reader, Session},
+};
 
 type Array = [usize; 4]; // selected index, count, vector pointer, stride
 type Guard = (usize, Vec<u8>);
@@ -395,11 +399,38 @@ fn snapshot(
 }
 
 pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
+    let started = Instant::now();
+    event(
+        "hunt.opening_process",
+        format_args!("game_pid={}", session.pid),
+    );
     let reader = Reader::open(session)?;
+    event(
+        "hunt.locating_module",
+        format_args!("game_pid={}", session.pid),
+    );
     let base = reader.module_base(session)?;
     let file = fs::metadata(&session.path)?;
+    event(
+        "hunt.reading_image",
+        format_args!("game_pid={} bytes={}", session.pid, file.len()),
+    );
     let bytes = fs::read(&session.path)?;
+    event(
+        "hunt.analyzing_image",
+        format_args!("game_pid={}", session.pid),
+    );
     let plan = analyze(&bytes, stop)?;
+    event(
+        "hunt.plan_ready",
+        format_args!(
+            "game_pid={} build={} guards={} elapsed_ms={}",
+            session.pid,
+            plan.build,
+            plan.guards.len(),
+            started.elapsed().as_millis()
+        ),
+    );
     let verify = || -> io::Result<()> {
         let current = fs::metadata(&session.path)?;
         if current.len() != file.len() || current.modified()? != file.modified()? {
@@ -421,13 +452,40 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
         Ok(())
     };
     verify()?;
+    event(
+        "hunt.code_verified",
+        format_args!("game_pid={} build={}", session.pid, plan.build),
+    );
     let stacks = reader.stacks(session)?;
+    let total = stacks.len();
+    event(
+        "hunt.scanning_stacks",
+        format_args!("game_pid={} stacks={total}", session.pid),
+    );
     let mut seen = BTreeSet::new();
     let mut found = BTreeMap::new();
-    for stack in stacks {
+    let mut bytes_examined = 0;
+    let mut next_report = Instant::now() + Duration::from_secs(1);
+    for (stack_index, stack) in stacks.into_iter().enumerate() {
         for start in (stack.start..stack.end).step_by(256 * 1024) {
             cancelled(stop)?;
             let length = (stack.end - start).min(256 * 1024 + 16);
+            bytes_examined += (stack.end - start).min(256 * 1024);
+            if Instant::now() >= next_report {
+                event(
+                    "hunt.scan_progress",
+                    format_args!(
+                        "game_pid={} stack={}/{} bytes_examined={} candidate_headers={} matched_allocations={}",
+                        session.pid,
+                        stack_index + 1,
+                        total,
+                        bytes_examined,
+                        seen.len(),
+                        found.len()
+                    ),
+                );
+                next_report = Instant::now() + Duration::from_secs(1);
+            }
             let mut raw = vec![0; length];
             if reader.read(start, &mut raw).is_err() {
                 // A guard page can split this chunk. Scan readable pages separately.
@@ -460,6 +518,15 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
                     && let Some((address, character)) =
                         snapshot(&reader, &plan, game, &raw[offset..offset + 24])
                 {
+                    event(
+                        "hunt.character_candidate",
+                        format_args!(
+                            "game_pid={} slot={} participants={}",
+                            session.pid,
+                            character.index + 1,
+                            character.count
+                        ),
+                    );
                     found.insert(address, character);
                     if found.len() > 1 {
                         return Err(io::Error::other(
@@ -471,6 +538,16 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
         }
     }
     verify()?;
+    event(
+        "hunt.scan_complete",
+        format_args!(
+            "game_pid={} stacks={total} bytes_examined={} candidate_headers={} matched_allocations={}",
+            session.pid,
+            bytes_examined,
+            seen.len(),
+            found.len()
+        ),
+    );
     Ok(Snapshot {
         build: plan.build,
         character: found.into_values().next(),

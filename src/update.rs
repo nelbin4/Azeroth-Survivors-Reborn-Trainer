@@ -1,5 +1,6 @@
 use std::{io, time::Duration};
 
+use crate::diagnostic_log::event;
 use serde::Deserialize;
 
 pub const PROJECT: &str = "https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer";
@@ -33,6 +34,7 @@ pub fn version(input: &str) -> Option<[u32; 3]> {
 }
 
 pub fn check(current: &str) -> io::Result<ReleaseStatus> {
+    event("update.check_started", format_args!("installed={current}"));
     let response = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(15))
         .redirects(0)
@@ -51,7 +53,12 @@ pub fn check(current: &str) -> io::Result<ReleaseStatus> {
     if body.len() > 2 * 1024 * 1024 {
         return Err(io::Error::other("Release response is too large."));
     }
-    from_response(serde_json::from_slice(&body)?, current)
+    let status = from_response(serde_json::from_slice(&body)?, current)?;
+    event(
+        "update.check_finished",
+        format_args!("latest={} available={}", status.tag, status.available),
+    );
+    Ok(status)
 }
 
 fn from_response(release: Release, current: &str) -> io::Result<ReleaseStatus> {

@@ -14,6 +14,7 @@ use eframe::egui::{self, Button, Color32, RichText};
 use egui_extras::{Column, TableBuilder};
 
 use crate::{
+    diagnostic_log::event,
     hunt::{self, Snapshot},
     process::{self, Games, Session},
     settings::Settings,
@@ -153,8 +154,17 @@ impl TrainerApp {
                 .load_texture("trainer-logo", image, egui::TextureOptions::LINEAR)
         });
         let (settings, error) = match Settings::load() {
-            Ok(settings) => (settings, None),
-            Err(error) => (Settings::default(), Some(format!("Settings: {error}"))),
+            Ok(settings) => {
+                event(
+                    "settings.loaded",
+                    format_args!("saved_game_path={}", settings.game_path().is_some()),
+                );
+                (settings, None)
+            }
+            Err(error) => {
+                event("settings.load_failed", format_args!("{error}"));
+                (Settings::default(), Some(format!("Settings: {error}")))
+            }
         };
         Self {
             settings,
@@ -180,6 +190,15 @@ impl TrainerApp {
 
     fn set_session(&mut self, session: Option<Session>) {
         if self.session != session {
+            if let Some(old) = &self.session {
+                event("process.detached", format_args!("game_pid={}", old.pid));
+            }
+            if let Some(new) = &session {
+                event("process.attached", format_args!("game_pid={}", new.pid));
+            }
+            if self.scan.is_some() {
+                event("hunt.cancelled", format_args!("reason=connection_changed"));
+            }
             self.session = session;
             self.scan = None;
             self.snapshot = None;
@@ -197,6 +216,12 @@ impl TrainerApp {
         if let Some(result) = finished(&mut self.process_result) {
             match result {
                 Ok(games) => {
+                    if self.running != games.running() {
+                        event(
+                            "process.presence",
+                            format_args!("game_running={}", games.running()),
+                        );
+                    }
                     self.running = games.running();
                     self.set_session(
                         games
@@ -207,22 +232,39 @@ impl TrainerApp {
                 Err(error) => {
                     self.running = true;
                     self.set_session(None);
-                    self.error = Some(format!("Game detection: {error}"));
+                    let message = format!("Game detection: {error}");
+                    if self.error.as_deref() != Some(message.as_str()) {
+                        event("process.discovery_failed", format_args!("{error}"));
+                    }
+                    self.error = Some(message);
                 }
             }
         }
         if let Some(result) = finished(&mut self.launch_result) {
             match result {
                 Ok(session) => {
+                    event(
+                        "process.launch_finished",
+                        format_args!("game_pid={}", session.pid),
+                    );
                     self.running = true;
                     self.set_session(Some(session));
                 }
-                Err(error) => self.error = Some(error.to_string()),
+                Err(error) => {
+                    event("process.launch_failed", format_args!("{error}"));
+                    self.error = Some(error.to_string());
+                }
             }
         }
         if let Some(result) = finished(&mut self.stop_result) {
             if let Err(error) = result {
+                event("process.stop_failed", format_args!("{error}"));
                 self.error = Some(format!("Could not stop Reborn: {error}"));
+            } else {
+                event(
+                    "process.stop_sent",
+                    format_args!("waiting_for_process_exit"),
+                );
             }
             self.next_process_check = Instant::now();
         }
@@ -251,6 +293,16 @@ impl TrainerApp {
             {
                 match outcome {
                     Ok(snapshot) => {
+                        event(
+                            "hunt.finished",
+                            format_args!(
+                                "game_pid={} build={} character_found={} elapsed_ms={}",
+                                search.session.pid,
+                                snapshot.build,
+                                snapshot.character.is_some(),
+                                search.started.elapsed().as_millis()
+                            ),
+                        );
                         self.status = if snapshot.character.is_some() {
                             "Character found. Diagnostic readings only.".into()
                         } else {
@@ -258,7 +310,17 @@ impl TrainerApp {
                         };
                         self.snapshot = Some(snapshot);
                     }
-                    Err(error) => self.status = error.to_string(),
+                    Err(error) => {
+                        event(
+                            "hunt.failed",
+                            format_args!(
+                                "game_pid={} elapsed_ms={} error={error}",
+                                search.session.pid,
+                                search.started.elapsed().as_millis()
+                            ),
+                        );
+                        self.status = error.to_string();
+                    }
                 }
             }
         }
@@ -268,7 +330,10 @@ impl TrainerApp {
                     self.update_status = format!("Latest stable · {}", status.tag);
                     self.update_tag = status.available.then_some(status.tag);
                 }
-                Err(error) => self.update_status = format!("Release check: {error}"),
+                Err(error) => {
+                    event("update.check_failed", format_args!("{error}"));
+                    self.update_status = format!("Release check: {error}");
+                }
             }
         }
         context.request_repaint_after(Duration::from_millis(250));
@@ -279,6 +344,7 @@ impl TrainerApp {
             self.snapshot = None;
             self.error = None;
             self.status = "Finding the selected character…".into();
+            event("hunt.requested", format_args!("game_pid={}", session.pid));
             let stop = Arc::new(AtomicBool::new(false));
             let worker_session = session.clone();
             let worker_stop = stop.clone();
@@ -293,18 +359,30 @@ impl TrainerApp {
     }
 
     fn locate(&mut self) -> Option<PathBuf> {
-        let path = rfd::FileDialog::new()
+        event("settings.locate_game", format_args!("dialog_opened"));
+        let Some(path) = rfd::FileDialog::new()
             .add_filter("Windows executable", &["exe"])
-            .pick_file()?;
+            .pick_file()
+        else {
+            event("settings.locate_game_cancelled", format_args!(""));
+            return None;
+        };
         if !path
             .file_name()
             .is_some_and(|name| name.eq_ignore_ascii_case(process::GAME_EXE))
         {
+            event(
+                "settings.game_path_rejected",
+                format_args!("unexpected_executable_name"),
+            );
             self.error = Some("Choose AzerothSurvivorsGame.exe.".into());
             return None;
         }
         if let Err(error) = self.settings.set_game_path(&path) {
+            event("settings.save_failed", format_args!("{error}"));
             self.error = Some(format!("Could not save game path: {error}"));
+        } else {
+            event("settings.saved", format_args!("changed=game_executable"));
         }
         Some(path)
     }
@@ -323,6 +401,7 @@ impl TrainerApp {
                     .map(PathBuf::from)
                     .or_else(|| self.locate())
             {
+                event("process.launch_requested", format_args!(""));
                 self.launch_result = Some(task(context, move || process::launch(&path)));
             }
             if ui
@@ -337,7 +416,10 @@ impl TrainerApp {
             if ui.button("Locate exe file").clicked() {
                 self.locate();
             }
-            self.show_details |= ui.button("Advanced").clicked();
+            if ui.button("Advanced").clicked() {
+                event("diagnostics.opened", format_args!(""));
+                self.show_details = true;
+            }
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), 0.0),
                 egui::Layout::top_down(egui::Align::RIGHT),
@@ -393,8 +475,16 @@ impl TrainerApp {
             });
         });
         if cancel || context.input(|input| input.key_pressed(egui::Key::Escape)) {
+            event(
+                "process.stop_cancelled",
+                format_args!("game_pid={}", session.pid),
+            );
             self.confirm_stop = None;
         } else if stop {
+            event(
+                "process.stop_requested",
+                format_args!("game_pid={}", session.pid),
+            );
             self.confirm_stop = None;
             self.scan = None;
             self.snapshot = None;
@@ -458,6 +548,9 @@ impl TrainerApp {
                     row.col(|ui| { ui.label(target); });
                     row.col(|ui| { ui.label(RichText::new(status).color(MUTED)); });
                     if row.response().clicked() {
+                        if selected != index {
+                            event("stats.selected", format_args!("stat={}", stat.key));
+                        }
                         selected = index;
                     }
                 });
@@ -497,6 +590,7 @@ impl TrainerApp {
             .clicked()
         {
             if finding {
+                event("hunt.cancelled", format_args!("reason=user"));
                 self.scan = None;
                 self.status = "Search stopped.".into();
             } else {
@@ -631,6 +725,7 @@ impl eframe::App for TrainerApp {
                     });
                     ui.separator();
                     if ui.button("Copy details").clicked() {
+                        event("diagnostics.copied", format_args!(""));
                         context.copy_text(text.clone());
                     }
                     ui.monospace(text);
