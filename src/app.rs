@@ -113,6 +113,15 @@ pub struct TrainerApp {
     install_result: Option<Receiver<io::Result<()>>>,
 }
 
+fn footer_button_row(ui: &mut egui::Ui) -> egui::Rect {
+    let height = ui.spacing().interact_size.y + ui.spacing().button_padding.y * 2.0;
+    ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    )
+    .0
+}
+
 fn checked_targets(enabled: &[bool; 17], targets: &[u32; 17]) -> hunt::Targets {
     STATS
         .iter()
@@ -596,103 +605,111 @@ impl TrainerApp {
     }
 
     fn footer(&mut self, context: &egui::Context, ui: &mut egui::Ui) {
-        ui.horizontal_top(|ui| {
-            if ui
-                .add_enabled(
-                    !self.running && self.launch_result.is_none() && self.process_result.is_none(),
-                    Button::new("Run Game"),
-                )
-                .clicked()
-                && let Some(path) = self
-                    .settings
-                    .game_path()
-                    .map(PathBuf::from)
-                    .or_else(|| self.locate())
-            {
-                event("process.launch_requested", format_args!(""));
-                self.launch_result = Some(task(context, move || process::launch(&path)));
-            }
-            if ui
-                .add_enabled(
-                    self.session.is_some() && self.stop_result.is_none() && self.apply.is_none(),
-                    Button::new("Stop Game"),
-                )
-                .clicked()
-            {
-                self.confirm_stop = self.session.clone();
-            }
-            if ui.button("Locate exe file").clicked() {
-                self.locate();
-            }
-            if ui.button("Advanced").clicked() {
-                event("diagnostics.opened", format_args!(""));
-                self.show_details = true;
-            }
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), 0.0),
-                egui::Layout::top_down(egui::Align::RIGHT),
-                |ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let latest = self
-                            .using_latest_until
-                            .is_some_and(|until| Instant::now() < until);
-                        let idle = self.update_result.is_none()
-                            && self.install_result.is_none()
-                            && !latest;
-                        let label = if self.install_result.is_some() {
-                            "Downloading…"
-                        } else if self.update_result.is_some() {
-                            "Checking…"
-                        } else if latest {
-                            "Using Latest"
-                        } else if self.update_asset.is_some() {
-                            "Download & Install"
-                        } else {
-                            "Check updates"
-                        };
-                        if ui.add_enabled(idle, Button::new(label)).clicked() {
-                            self.update_error = None;
-                            if let Some(asset) = self.update_asset.clone() {
-                                self.update_status = "Downloading update…".into();
-                                self.install_result =
-                                    Some(task(context, move || update::stage_and_launch(&asset)));
-                            } else {
-                                self.update_status = "Checking…".into();
-                                self.manual_update_check = true;
-                                self.update_result = Some(task(context, || update::check(VERSION)));
-                            }
-                        }
-                        if ui.button("Github Page").clicked() {
-                            context.open_url(egui::OpenUrl::new_tab(update::PROJECT));
-                        }
-                    });
-                    let mut status =
-                        RichText::new(format!("{VERSION} - {}", self.update_status)).small();
-                    if self.update_status == "Update Available" {
-                        let seconds = context.input(|input| input.time);
-                        let glow = ((seconds * std::f64::consts::TAU / 5.0).cos() + 1.0) * 0.5;
-                        status = status
-                            .color(Color32::from_rgb(
-                                255,
-                                200 + (45.0 * glow) as u8,
-                                35 + (105.0 * glow) as u8,
-                            ))
-                            .background_color(Color32::from_rgba_unmultiplied(
-                                255,
-                                215,
-                                65,
-                                (28.0 * glow) as u8,
-                            ));
-                        context.request_repaint_after(Duration::from_millis(50));
+        let row = footer_button_row(ui);
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(row)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                if ui
+                    .add_enabled(
+                        !self.running
+                            && self.launch_result.is_none()
+                            && self.process_result.is_none(),
+                        Button::new("Run Game"),
+                    )
+                    .clicked()
+                    && let Some(path) = self
+                        .settings
+                        .game_path()
+                        .map(PathBuf::from)
+                        .or_else(|| self.locate())
+                {
+                    event("process.launch_requested", format_args!(""));
+                    self.launch_result = Some(task(context, move || process::launch(&path)));
+                }
+                if ui
+                    .add_enabled(
+                        self.session.is_some()
+                            && self.stop_result.is_none()
+                            && self.apply.is_none(),
+                        Button::new("Stop Game"),
+                    )
+                    .clicked()
+                {
+                    self.confirm_stop = self.session.clone();
+                }
+                if ui.button("Locate exe file").clicked() {
+                    self.locate();
+                }
+                if ui.button("Advanced").clicked() {
+                    event("diagnostics.opened", format_args!(""));
+                    self.show_details = true;
+                }
+            },
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(row)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                let latest = self
+                    .using_latest_until
+                    .is_some_and(|until| Instant::now() < until);
+                let idle = self.update_result.is_none() && self.install_result.is_none() && !latest;
+                let label = if self.install_result.is_some() {
+                    "Downloading…"
+                } else if self.update_result.is_some() {
+                    "Checking…"
+                } else if latest {
+                    "Using Latest"
+                } else if self.update_asset.is_some() {
+                    "Download & Install"
+                } else {
+                    "Check updates"
+                };
+                if ui.add_enabled(idle, Button::new(label)).clicked() {
+                    self.update_error = None;
+                    if let Some(asset) = self.update_asset.clone() {
+                        self.update_status = "Downloading update…".into();
+                        self.install_result =
+                            Some(task(context, move || update::stage_and_launch(&asset)));
                     } else {
-                        status = status.color(MINT);
+                        self.update_status = "Checking…".into();
+                        self.manual_update_check = true;
+                        self.update_result = Some(task(context, || update::check(VERSION)));
                     }
-                    let response = ui.label(status);
-                    if let Some(error) = &self.update_error {
-                        response.on_hover_text(error);
-                    }
-                },
-            );
+                }
+                if ui.button("Github Page").clicked() {
+                    context.open_url(egui::OpenUrl::new_tab(update::PROJECT));
+                }
+            },
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut status = RichText::new(format!("{VERSION} - {}", self.update_status)).small();
+            if self.update_status == "Update Available" {
+                let seconds = context.input(|input| input.time);
+                let glow = ((seconds * std::f64::consts::TAU / 5.0).cos() + 1.0) * 0.5;
+                status = status
+                    .color(Color32::from_rgb(
+                        255,
+                        200 + (45.0 * glow) as u8,
+                        35 + (105.0 * glow) as u8,
+                    ))
+                    .background_color(Color32::from_rgba_unmultiplied(
+                        255,
+                        215,
+                        65,
+                        (28.0 * glow) as u8,
+                    ));
+                context.request_repaint_after(Duration::from_millis(50));
+            } else {
+                status = status.color(MINT);
+            }
+            let response = ui.label(status);
+            if let Some(error) = &self.update_error {
+                response.on_hover_text(error);
+            }
         });
     }
 
@@ -1085,5 +1102,52 @@ mod tests {
             checked_targets(&enabled, &targets),
             [("damage", 222), ("crit_damage", 127)].into()
         );
+    }
+    #[test]
+    fn footer_update_button_receives_pointer_clicks() {
+        use egui::{Align, Event, Layout, PointerButton, Pos2, RawInput, Rect, UiBuilder, vec2};
+        let context = egui::Context::default();
+        let mut position = Pos2::ZERO;
+        let mut clicked = false;
+        let mut frame = |events| {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1010.0, 810.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = context.run(input, |ctx| {
+                egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
+                    let row = footer_button_row(ui);
+                    ui.scope_builder(
+                        UiBuilder::new()
+                            .max_rect(row)
+                            .layout(Layout::right_to_left(Align::Center)),
+                        |ui| {
+                            let response = ui.button("Check updates");
+                            position = response.rect.center();
+                            clicked |= response.clicked();
+                        },
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label("1.0.0 - Latest");
+                    });
+                });
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.label("Stats");
+                });
+            });
+            position
+        };
+        let center = frame(vec![]);
+        frame(vec![Event::PointerMoved(center)]);
+        for pressed in [true, false] {
+            frame(vec![Event::PointerButton {
+                pos: center,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]);
+        }
+        assert!(clicked);
     }
 }
