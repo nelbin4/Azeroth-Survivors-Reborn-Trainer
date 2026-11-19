@@ -101,6 +101,8 @@ pub struct TrainerApp {
     status: String,
     error: Option<String>,
     show_details: bool,
+    log_tail: String,
+    next_log_read: Instant,
     selected: usize,
     logo: Option<egui::TextureHandle>,
     update_result: Option<Receiver<io::Result<update::ReleaseStatus>>>,
@@ -235,6 +237,8 @@ impl TrainerApp {
             snapshot: None,
             status: "Start Reborn to find a character.".into(),
             show_details: false,
+            log_tail: String::new(),
+            next_log_read: Instant::now(),
             selected: 0,
             logo,
             update_result: Some(task(&context.egui_ctx, || update::check(VERSION))),
@@ -645,6 +649,7 @@ impl TrainerApp {
                 if ui.button("Advanced").clicked() {
                     event("diagnostics.opened", format_args!(""));
                     self.show_details = true;
+                    self.next_log_read = Instant::now();
                 }
             });
             let ui = &mut columns[1];
@@ -1066,6 +1071,7 @@ impl TrainerApp {
                 directory.join("reborn-rust.log").display()
             );
         }
+        let _ = writeln!(report, "\nRECENT LOG (up to 40 lines)\n{}", self.log_tail);
         report
     }
 }
@@ -1141,6 +1147,14 @@ impl eframe::App for TrainerApp {
             );
         }
         if self.show_details {
+            if Instant::now() >= self.next_log_read {
+                self.next_log_read = Instant::now() + Duration::from_secs(1);
+                self.log_tail = crate::settings::state_directory()
+                    .and_then(|directory| {
+                        crate::diagnostic_log::recent_lines(&directory.join("reborn-rust.log"))
+                    })
+                    .unwrap_or_else(|error| format!("Log unavailable: {error}"));
+            }
             let text = self.diagnostic_text();
             egui::Window::new("Detection details")
                 .open(&mut self.show_details)

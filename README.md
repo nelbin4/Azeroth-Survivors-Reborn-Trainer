@@ -29,7 +29,8 @@ Current health follows verified maximum health. Echo requires the active Echo ef
 ### Troubleshooting
 
 Open **Advanced → Detection details** and click **Copy details** to copy the game
-build, process, session state, last Apply error, and per-stat readings and targets.
+build, process, session state, last Apply error, per-stat readings and targets,
+and up to 40 recent log lines. The log tail refreshes while Advanced is open.
 The background log includes search, session check, update, and stat events at
 `%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-rust.log`.
 At 4 MiB the log rotates to `reborn-rust.previous.log`. If settings are malformed,

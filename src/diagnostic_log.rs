@@ -1,7 +1,7 @@
 use std::{
     fmt,
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
@@ -76,6 +76,25 @@ pub fn event(name: &'static str, details: fmt::Arguments<'_>) {
     if let Some(sender) = SENDER.get() {
         sender.write(name, details);
     }
+}
+
+pub fn recent_lines(path: &Path) -> io::Result<String> {
+    const READ_LIMIT: u64 = 24 * 1024;
+    const LINE_LIMIT: usize = 40;
+    let mut file = fs::File::open(path)?;
+    let start = file.metadata()?.len().saturating_sub(READ_LIMIT);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(READ_LIMIT).read_to_end(&mut bytes)?;
+    let contents = String::from_utf8_lossy(&bytes);
+    let contents = if start == 0 {
+        contents.as_ref()
+    } else {
+        contents.split_once('\n').map_or("", |(_, tail)| tail)
+    };
+    let mut lines: Vec<_> = contents.lines().rev().take(LINE_LIMIT).collect();
+    lines.reverse();
+    Ok(lines.join("\n"))
 }
 
 fn timestamp() -> String {
