@@ -662,6 +662,33 @@ impl TrainerApp {
             });
             let ui = &mut columns[1];
             update_button_row(ui, |ui| {
+                let mut status = RichText::new(format!("{VERSION} - {}", self.update_status))
+                    .size(16.0)
+                    .strong();
+                if self.update_status == "Update Available" {
+                    let seconds = context.input(|input| input.time);
+                    let glow = ((seconds * std::f64::consts::TAU / 5.0).cos() + 1.0) * 0.5;
+                    status = status
+                        .color(Color32::from_rgb(
+                            255,
+                            200 + (45.0 * glow) as u8,
+                            35 + (105.0 * glow) as u8,
+                        ))
+                        .background_color(Color32::from_rgba_unmultiplied(
+                            255,
+                            215,
+                            65,
+                            (28.0 * glow) as u8,
+                        ));
+                    context.request_repaint_after(Duration::from_millis(50));
+                } else {
+                    status = status.color(MINT);
+                }
+                let response = ui.label(status);
+                if let Some(error) = &self.update_error {
+                    response.on_hover_text(error);
+                }
+
                 let latest = self
                     .using_latest_until
                     .is_some_and(|until| Instant::now() < until);
@@ -691,34 +718,6 @@ impl TrainerApp {
                 }
                 if ui.button("Github Page").clicked() {
                     context.open_url(egui::OpenUrl::new_tab(update::PROJECT));
-                }
-            });
-            right_aligned_row(ui, ui.spacing().interact_size.y, |ui| {
-                let mut status = RichText::new(format!("{VERSION} - {}", self.update_status))
-                    .size(16.0)
-                    .strong();
-                if self.update_status == "Update Available" {
-                    let seconds = context.input(|input| input.time);
-                    let glow = ((seconds * std::f64::consts::TAU / 5.0).cos() + 1.0) * 0.5;
-                    status = status
-                        .color(Color32::from_rgb(
-                            255,
-                            200 + (45.0 * glow) as u8,
-                            35 + (105.0 * glow) as u8,
-                        ))
-                        .background_color(Color32::from_rgba_unmultiplied(
-                            255,
-                            215,
-                            65,
-                            (28.0 * glow) as u8,
-                        ));
-                    context.request_repaint_after(Duration::from_millis(50));
-                } else {
-                    status = status.color(MINT);
-                }
-                let response = ui.label(status);
-                if let Some(error) = &self.update_error {
-                    response.on_hover_text(error);
                 }
             });
             if self.update_result.is_some() || self.install_result.is_some() {
@@ -1220,10 +1219,10 @@ mod tests {
                 ui.columns(2, |columns| {
                     columns[0].label("Run Game");
                     update_button_row(&mut columns[1], |ui| {
-                        ui.label("Check updates");
-                    });
-                    right_aligned_row(&mut columns[1], 27.0, |ui| {
-                        ui.label("Latest");
+                        let version = ui.label("Latest");
+                        let update = ui.button("Check updates");
+                        assert!(version.rect.left() >= update.rect.right());
+                        assert!((version.rect.center().y - update.rect.center().y).abs() < 1.0);
                     });
                 });
             });
@@ -1254,12 +1253,10 @@ mod tests {
                     ui.columns(2, |columns| {
                         columns[0].label("Game");
                         update_button_row(&mut columns[1], |ui| {
+                            ui.label(format!("{VERSION} - Latest"));
                             let response = ui.button("Check updates");
                             position = response.rect.center();
                             clicked |= response.clicked();
-                        });
-                        right_aligned_row(&mut columns[1], 27.0, |ui| {
-                            ui.label("1.0.0 - Latest");
                         });
                     });
                 });

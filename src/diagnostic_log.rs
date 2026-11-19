@@ -11,7 +11,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-const LOG_LIMIT: u64 = 4 * 1024 * 1024;
+const LOG_LIMIT: u64 = 10_000;
 
 enum Message {
     Event(&'static str, String),
@@ -125,7 +125,13 @@ fn write_file(
     let pid = std::process::id();
     let append = |name, details: &str| -> io::Result<()> {
         let details = details.replace('\r', "\\r").replace('\n', "\\n");
-        let line = format!("{} pid={pid} {name} {details}\n", timestamp());
+        let mut line = format!("{} pid={pid} {name} {details}\n", timestamp());
+        const TRUNCATED: &str = " [truncated]\n";
+        if line.len() > LOG_LIMIT as usize {
+            let end = line.floor_char_boundary(LOG_LIMIT as usize - TRUNCATED.len());
+            line.truncate(end);
+            line.push_str(TRUNCATED);
+        }
         lock.lock()?;
         let result = append_line(&path, line.as_bytes(), LOG_LIMIT);
         result.and(lock.unlock())
