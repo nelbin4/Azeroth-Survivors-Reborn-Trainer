@@ -2,11 +2,13 @@ reborn-settings.json
 reborn-recovery.json
 *.tmp
 *.lock
+!/Cargo.lock
 probe-*.bin
 probe-*.json
 backups/
 *.log
 build/
+target/
 dist/
 release/
 __pycache__/

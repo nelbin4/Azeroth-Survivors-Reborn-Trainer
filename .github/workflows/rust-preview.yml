@@ -1,0 +1,49 @@
+name: Reborn Rust preview
+
+on:
+  push:
+    branches: ['codex/rust-migration']
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'rust-toolchain.toml'
+      - 'assets/**'
+      - '.github/workflows/rust-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup show
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo build --release --locked
+      - name: Verify standalone Windows executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path preview | Out-Null
+          $preview = Join-Path $PWD 'preview'
+          $name = 'Azeroth.Survivor.Reborn.Trainer.exe'
+          $exe = Join-Path $preview $name
+          Copy-Item -LiteralPath 'target/release/reborn-trainer.exe' -Destination $exe
+          $probe = Start-Process -FilePath $exe -WorkingDirectory $preview -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru -Wait
+          if ($probe.ExitCode -ne 0) { throw "Trainer smoke test failed with exit code $($probe.ExitCode)" }
+          if ((Get-Item -LiteralPath $exe).Length -gt 64MB) { throw 'EXE exceeds the current updater download limit.' }
+          Get-FileHash -Algorithm SHA256 -LiteralPath $exe | Format-List -Property Hash
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Reborn-Rust-Preview-Windows-x64
+          path: preview/Azeroth.Survivor.Reborn.Trainer.exe
+          if-no-files-found: error
