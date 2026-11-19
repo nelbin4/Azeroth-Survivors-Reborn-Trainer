@@ -2,7 +2,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
-    path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -156,7 +155,7 @@ fn root(instructions: &[Instruction]) -> Option<Root> {
         hero: Register::None,
     };
     if !(0x200..=0x10000).contains(&stride)
-        || stride % 8 != 0
+        || !stride.is_multiple_of(8)
         || scaled == pointer_reg
         || root.field(lea)? != 0
     {
@@ -193,7 +192,7 @@ fn vector_offset(root: Root, vectors: &[Instruction], branch: &Instruction) -> O
     let first = *offsets.first()?;
     (offsets.len() == 4
         && (0x160..=root.array[3] - 64).contains(&first)
-        && first % 4 == 0
+        && first.is_multiple_of(4)
         && offsets == [first, first + 16, first + 32, first + 48]
         && branch.near_branch_target() >= vectors.last()?.next_ip())
     .then_some(first)
@@ -292,7 +291,7 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
     let names: Vec<_> = checks
         .iter()
         .filter_map(|(&(owner, name), guard)| {
-            (owner == *array && (0x160..=array[3] - 24).contains(&name) && name % 8 == 0)
+            (owner == *array && (0x160..=array[3] - 24).contains(&name) && name.is_multiple_of(8))
                 .then(|| drops.get(&(owner, name)).map(|drop| (name, guard, drop)))
                 .flatten()
         })
@@ -316,7 +315,7 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
 }
 
 fn plausible_pointer(address: usize) -> bool {
-    (0x10000..0x7fff_ffff_f000).contains(&address) && address % 8 == 0
+    (0x10000..0x7fff_ffff_f000).contains(&address) && address.is_multiple_of(8)
 }
 
 fn snapshot(
@@ -492,6 +491,42 @@ mod tests {
         assert_eq!(
             cancelled(&AtomicBool::new(true)).unwrap_err().kind(),
             io::ErrorKind::Interrupted
+        );
+    }
+
+    #[test]
+    fn relocated_array_requires_both_independent_identity_routines() {
+        let mut image = vec![0; 0x400];
+        image[..2].copy_from_slice(b"MZ");
+        image[0x3c] = 0x80;
+        image[0x80..0x88].copy_from_slice(b"PE\0\0\x64\x86\x01\x00");
+        image[0x98..0xa0].copy_from_slice(b".text\0\0\0");
+        image[0xa4..0xb0].copy_from_slice(&[0, 0x10, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0]);
+        let header = b"\x48\x8b\x89\x38\x0e\0\0\x49\x8b\x95\x90\x0b\0\0\x48\x39\xd1\x0f\x83\x64\0\0\0\x49\x8b\x95\x88\x0b\0\0\x48\x69\xc9\x58\x18\0\0\x48\x8d\x1c\x0a";
+        let vectors = b"\x0f\x10\x84\x0a\x40\x17\0\0\xf3\x0f\x6f\x8c\x0a\x50\x17\0\0\xf3\x0f\x6f\x94\x0a\x60\x17\0\0\xf3\x0f\x6f\x9c\x0a\x70\x17\0\0";
+        let check = b"\x48\x83\xbb\xd8\x11\0\0\xff";
+        let drop = b"\x48\x8b\x83\xd8\x11\0\0\x48\x83\xf8\xff\x74\x11\x48\x85\xc0\x74\x0c\x48\x8b\x8b\xe0\x11\0\0\xe8\0\0\0\0";
+        for (offset, tail) in [
+            (0x200, vectors.as_slice()),
+            (0x280, check.as_slice()),
+            (0x300, drop.as_slice()),
+        ] {
+            image[offset..offset + header.len()].copy_from_slice(header);
+            image[offset + header.len()..offset + header.len() + tail.len()].copy_from_slice(tail);
+        }
+        let stop = AtomicBool::new(false);
+        let plan = analyze(&image, &stop).unwrap();
+        assert_eq!(plan.array, [0xE38, 0xB90, 0xB88, 0x1858]);
+        assert_eq!(
+            (plan.name, plan.stats, plan.guards.len()),
+            (0x11D8, 0x1740, 3)
+        );
+        image[0x300] = 0;
+        assert!(
+            analyze(&image, &stop)
+                .unwrap_err()
+                .to_string()
+                .contains("Player identity unavailable")
         );
     }
 }
