@@ -105,7 +105,6 @@ pub struct TrainerApp {
     error: Option<String>,
     show_details: bool,
     selected: usize,
-    stat_column_widths: Option<[f32; 5]>,
     logo: Option<egui::TextureHandle>,
     update_result: Option<Receiver<io::Result<update::ReleaseStatus>>>,
     update_status: String,
@@ -242,7 +241,6 @@ impl TrainerApp {
             status: "Start Reborn to find a character.".into(),
             show_details: false,
             selected: 0,
-            stat_column_widths: None,
             logo,
             update_result: Some(task(&context.egui_ctx, || update::check(VERSION))),
             update_status: "Checking…".into(),
@@ -807,21 +805,17 @@ impl TrainerApp {
 
     fn stats_table(&mut self, ui: &mut egui::Ui, width: f32) {
         let titles = ["Enabled", "Stat", "Current", "Target", "Status"];
-        let minimums = [68.0, 100.0, 62.0, 59.0, 68.0];
         let spacing = ui.spacing().item_spacing.x * (titles.len() - 1) as f32;
-        let mut widths = *self.stat_column_widths.get_or_insert_with(|| {
-            [
-                76.0,
-                (width - spacing - 383.0).max(100.0),
-                88.0,
-                102.0,
-                117.0,
-            ]
-        });
+        let widths = [
+            76.0,
+            (width - spacing - 383.0).max(100.0),
+            88.0,
+            102.0,
+            117.0,
+        ];
         ui.spacing_mut().item_spacing.y = 2.0;
         let mut selected = self.selected;
         let mut preferences_changed = false;
-        let mut resize = None;
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .sense(egui::Sense::click())
@@ -831,37 +825,8 @@ impl TrainerApp {
         }
         table
             .header(31.0, |mut header| {
-                for (index, title) in titles.into_iter().enumerate() {
+                for title in titles {
                     header.col(|ui| {
-                        let cell = ui.max_rect();
-                        if index + 1 < titles.len() {
-                            let handle = egui::Rect::from_min_max(
-                                egui::pos2(cell.right() - 9.0, cell.top()),
-                                cell.right_bottom(),
-                            );
-                            let response = ui.interact(
-                                handle,
-                                ui.id().with(("stat-column-resize", index)),
-                                egui::Sense::drag(),
-                            );
-                            if response.hovered() || response.dragged() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
-                            }
-                            if response.dragged() {
-                                resize = Some((index, response.drag_delta().x));
-                                ui.ctx().request_repaint();
-                            }
-                            let color = if response.hovered() || response.dragged() {
-                                ACCENT
-                            } else {
-                                MUTED
-                            };
-                            ui.painter().vline(
-                                handle.center().x,
-                                handle.y_range().shrink(5.0),
-                                egui::Stroke::new(1.0, color),
-                            );
-                        }
                         ui.add(egui::Label::new(RichText::new(title).strong()).truncate());
                     });
                 }
@@ -927,15 +892,6 @@ impl TrainerApp {
                     });
                 }
             });
-        if let Some((index, delta)) = resize {
-            let delta = delta.clamp(
-                (minimums[index] - widths[index]).min(0.0),
-                (widths[index + 1] - minimums[index + 1]).max(0.0),
-            );
-            widths[index] += delta;
-            widths[index + 1] -= delta;
-            self.stat_column_widths = Some(widths);
-        }
         if self.selected != selected && self.commit_target() {
             self.selected = selected;
             self.target_entry = self.targets[selected].to_string();
