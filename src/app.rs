@@ -117,13 +117,17 @@ pub struct TrainerApp {
     update_ready: Option<PathBuf>,
 }
 
-fn update_button_row(ui: &mut egui::Ui, buttons: impl FnOnce(&mut egui::Ui)) {
-    let height = ui.spacing().interact_size.y + ui.spacing().button_padding.y * 2.0;
+fn right_aligned_row(ui: &mut egui::Ui, height: f32, content: impl FnOnce(&mut egui::Ui)) {
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), height),
         egui::Layout::right_to_left(egui::Align::Center),
-        buttons,
+        content,
     );
+}
+
+fn update_button_row(ui: &mut egui::Ui, buttons: impl FnOnce(&mut egui::Ui)) {
+    let height = ui.spacing().interact_size.y + ui.spacing().button_padding.y * 2.0;
+    right_aligned_row(ui, height, buttons);
 }
 
 fn checked_targets(enabled: &[bool; 17], targets: &[u32; 17]) -> hunt::Targets {
@@ -713,7 +717,7 @@ impl TrainerApp {
                     context.open_url(egui::OpenUrl::new_tab(update::PROJECT));
                 }
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            right_aligned_row(ui, ui.spacing().interact_size.y, |ui| {
                 let mut status = RichText::new(format!("{VERSION} - {}", self.update_status))
                     .size(16.0)
                     .strong();
@@ -1114,7 +1118,7 @@ impl eframe::App for TrainerApp {
                     );
                 });
                 ui.vertical(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    right_aligned_row(ui, ui.spacing().interact_size.y, |ui| {
                         if let Some(session) = &self.session {
                             ui.colored_label(MINT, format!("Connected · PID {}", session.pid));
                         } else if self.running {
@@ -1193,8 +1197,40 @@ mod tests {
         );
     }
     #[test]
+    fn right_aligned_status_rows_leave_room_for_the_main_content() {
+        let context = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1010.0, 810.0),
+            )),
+            ..Default::default()
+        };
+        let _ = context.run(input, |ctx| {
+            let footer = egui::TopBottomPanel::bottom("layout-test-footer").show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    columns[0].label("Run Game");
+                    update_button_row(&mut columns[1], |ui| {
+                        ui.label("Check updates");
+                    });
+                    right_aligned_row(&mut columns[1], 27.0, |ui| {
+                        ui.label("Latest");
+                    });
+                });
+            });
+            egui::CentralPanel::default().show(ctx, |ui| {
+                right_aligned_row(ui, 27.0, |ui| {
+                    ui.label("Waiting for Reborn.");
+                });
+                assert!(ui.available_height() > 600.0);
+                assert!(footer.response.rect.height() < 100.0);
+            });
+        });
+    }
+
+    #[test]
     fn footer_update_button_receives_pointer_clicks() {
-        use egui::{Align, Event, Layout, PointerButton, Pos2, RawInput, Rect, vec2};
+        use egui::{Event, PointerButton, Pos2, RawInput, Rect, vec2};
         let context = egui::Context::default();
         let mut position = Pos2::ZERO;
         let mut clicked = false;
@@ -1213,7 +1249,7 @@ mod tests {
                             position = response.rect.center();
                             clicked |= response.clicked();
                         });
-                        columns[1].with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        right_aligned_row(&mut columns[1], 27.0, |ui| {
                             ui.label("1.0.0 - Latest");
                         });
                     });
