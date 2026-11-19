@@ -613,10 +613,7 @@ impl eframe::App for TrainerApp {
                     .frame(egui::Frame::new())
                     .show_inside(ui, |ui| {
                         let width = ui.available_width();
-                        egui::ScrollArea::horizontal().show(ui, |ui| {
-                            ui.set_min_width(width);
-                            self.stats_table(ui, width);
-                        });
+                        self.stats_table(ui, width);
                     });
             });
         self.stop_confirmation(context);
