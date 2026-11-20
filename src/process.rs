@@ -380,9 +380,24 @@ impl Drop for WriterLock {
     }
 }
 
+fn writer_mutex_name(session: &Session) -> io::Result<Vec<u16>> {
+    use sha2::{Digest, Sha256};
+
+    let epoch = session
+        .created
+        .checked_sub(116_444_736_000_000_000)
+        .ok_or_else(|| io::Error::other("Invalid process creation time."))?;
+    let unix_seconds = epoch as f64 / 10_000_000.0;
+    let identity_key = format!("{}_{unix_seconds:?}", session.pid);
+    let digest = format!("{:x}", Sha256::digest(identity_key.as_bytes()));
+    Ok(format!("Local\\RebornTrainer_{}", &digest[..24])
+        .encode_utf16()
+        .chain([0])
+        .collect())
+}
+
 impl StatWriter {
     pub fn open(session: &Session) -> io::Result<Self> {
-        use sha2::{Digest, Sha256};
         use windows_sys::Win32::{
             Foundation::{
                 ERROR_ALREADY_EXISTS, GetLastError, SetLastError, WAIT_ABANDONED, WAIT_FAILED,
@@ -392,17 +407,7 @@ impl StatWriter {
                 CreateMutexW, PROCESS_VM_OPERATION, PROCESS_VM_WRITE, WaitForSingleObject,
             },
         };
-        let epoch = session
-            .created
-            .checked_sub(116_444_736_000_000_000)
-            .ok_or_else(|| io::Error::other("Invalid process creation time."))?;
-        let unix_seconds = epoch as f64 / 10_000_000.0;
-        let identity_key = format!("{}_{unix_seconds:?}", session.pid);
-        let digest = format!("{:x}", Sha256::digest(identity_key.as_bytes()));
-        let name: Vec<_> = format!("Local\\RebornTrainer_{}", &digest[..24])
-            .encode_utf16()
-            .chain([0])
-            .collect();
+        let name = writer_mutex_name(session)?;
         let (mutex, status) = unsafe {
             SetLastError(0);
             let mutex = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
@@ -508,15 +513,24 @@ mod tests {
     }
 
     #[test]
-    fn writer_uses_one_process_lock_and_writes_exactly_four_bytes() {
+    fn writer_acquires_idle_mutex_and_serializes_stat_writes() {
         use std::cell::UnsafeCell;
+        use windows_sys::Win32::System::Threading::CreateMutexW;
 
         let pid = std::process::id();
         let handle =
             Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) }).unwrap();
         let session = identity(pid, &handle).unwrap();
+        let name = writer_mutex_name(&session).unwrap();
+        let marker =
+            Handle::new(unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) }).unwrap();
         let writer = StatWriter::open(&session).unwrap();
-        assert!(StatWriter::open(&session).is_err());
+        let competing_session = session.clone();
+        assert!(
+            std::thread::spawn(move || StatWriter::open(&competing_session).is_err())
+                .join()
+                .unwrap()
+        );
         let values = UnsafeCell::new([17u32, 12]);
         let address = values.get() as usize;
         writer.write_value(address, &18u32.to_le_bytes()).unwrap();
@@ -528,6 +542,8 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()), 18);
         assert_eq!(u32::from_le_bytes(bytes[4..].try_into().unwrap()), 12);
         drop(writer);
-        assert!(StatWriter::open(&session).is_ok());
+        let writer = StatWriter::open(&session).unwrap();
+        drop(writer);
+        drop(marker);
     }
 }
