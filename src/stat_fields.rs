@@ -131,7 +131,9 @@ pub enum Profile {
     Current,
     /// A build whose stat block was found by code analysis. Combat fields sit at
     /// fixed positions inside that block, in the order shared by the builds above.
-    Block { stats: usize },
+    Block {
+        stats: usize,
+    },
 }
 
 // Offsets of the combat stats from the start of the 16-entry stat block. The
@@ -491,7 +493,10 @@ mod tests {
             .map(|field| (field.key, field.offset - 7368))
             .collect();
         for (key, offset) in &current {
-            assert!(block.contains(&(*key, *offset)), "{key} differs from Current");
+            assert!(
+                block.contains(&(*key, *offset)),
+                "{key} differs from Current"
+            );
         }
     }
 
