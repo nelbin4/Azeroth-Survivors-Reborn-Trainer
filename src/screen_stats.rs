@@ -48,23 +48,29 @@ pub fn read(pid: u32) -> io::Result<String> {
     let image = RgbaImage::from_raw(frame.width as u32, frame.height as u32, frame.pixels)
         .ok_or_else(|| io::Error::other("Invalid game capture dimensions."))?;
     let (width, height) = image.dimensions();
-    // Reborn puts live Stats to the right of the Character panel.
-    let x = width * 63 / 100;
-    let y = height * 13 / 100;
-    let w = width * 21 / 100;
-    let h = height * 54 / 100;
-    let crop = image::imageops::crop_imm(&image, x, y, w, h);
     let limit = OcrEngine::MaxImageDimension().map_err(io::Error::other)?;
-    let scale = (limit / w.max(h)).clamp(1, 3);
-    let crop = image::imageops::resize(&*crop, w * scale, h * scale, FilterType::Lanczos3);
+    if width.max(height) > limit {
+        return Err(io::Error::other("Game window is too large for Windows OCR."));
+    }
+    // Scan the whole game window; the Stats column is located from its heading.
+    let scale = (limit / width.max(height)).clamp(1, 3);
+    let scanned =
+        image::imageops::resize(&image, width * scale, height * scale, FilterType::Lanczos3);
     let result = recognize(
         &engine,
-        crop.as_raw(),
-        crop.width() as usize,
-        crop.height() as usize,
+        scanned.as_raw(),
+        scanned.width() as usize,
+        scanned.height() as usize,
     )
     .map_err(io::Error::other)?;
-    let rows = stat_rows(&result).map_err(io::Error::other)?;
+    let columns = stats_column(&result, scanned.width() as f32)
+        .map_err(io::Error::other)?
+        .ok_or_else(|| {
+            io::Error::other(
+                "Stats panel was not found on the game screen. Open Character in Reborn and try again.",
+            )
+        })?;
+    let rows = stat_rows(&result, Some(columns)).map_err(io::Error::other)?;
     panel_text(&rows).ok_or_else(|| {
         io::Error::other("Stats panel was not recognized. Open Character in Reborn and try again.")
     })
@@ -148,13 +154,15 @@ fn recognize(
     engine.RecognizeAsync(&bitmap)?.get()
 }
 
-fn stat_rows(result: &OcrResult) -> windows::core::Result<String> {
-    struct Word {
-        x: f32,
-        center: f32,
-        height: f32,
-        text: String,
-    }
+struct Word {
+    x: f32,
+    center_x: f32,
+    center: f32,
+    height: f32,
+    text: String,
+}
+
+fn collect_words(result: &OcrResult) -> windows::core::Result<Vec<Word>> {
     let lines = result.Lines()?;
     let mut words = Vec::new();
     for index in 0..lines.Size()? {
@@ -164,12 +172,32 @@ fn stat_rows(result: &OcrResult) -> windows::core::Result<String> {
             let bounds = word.BoundingRect()?;
             words.push(Word {
                 x: bounds.X,
+                center_x: bounds.X + bounds.Width / 2.0,
                 center: bounds.Y + bounds.Height / 2.0,
                 height: bounds.Height,
                 text: word.Text()?.to_string_lossy(),
             });
         }
     }
+    Ok(words)
+}
+
+// The Stats heading sits in the middle of its column; the column spans about 8.5% of the
+// game width to the left of the heading and 7.5% to the right.
+fn stats_column(result: &OcrResult, width: f32) -> windows::core::Result<Option<(f32, f32)>> {
+    Ok(collect_words(result)?
+        .iter()
+        .find(|word| word.text.eq_ignore_ascii_case("Stats"))
+        .map(|word| (word.center_x - 0.085 * width, word.center_x + 0.075 * width)))
+}
+
+fn stat_rows(result: &OcrResult, columns: Option<(f32, f32)>) -> windows::core::Result<String> {
+    let mut words: Vec<Word> = collect_words(result)?
+        .into_iter()
+        .filter(|word| {
+            columns.is_none_or(|(left, right)| (left..=right).contains(&word.center_x))
+        })
+        .collect();
     words.sort_by(|a, b| a.center.total_cmp(&b.center));
     let mut text = String::new();
     let mut remaining = words.as_mut_slice();
