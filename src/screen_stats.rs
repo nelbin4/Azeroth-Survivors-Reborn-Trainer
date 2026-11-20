@@ -1,4 +1,5 @@
-// Window capture and OCR calls adapted from the MIT-licensed Azeroth Survivors Trainer.\nuse image::{RgbaImage, imageops::FilterType};
+// Window capture and OCR calls adapted from the MIT-licensed Azeroth Survivors Trainer.
+use image::{RgbaImage, imageops::FilterType};
 use std::{io, ptr::null_mut, slice};
 use windows::{
     Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap},
