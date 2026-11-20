@@ -70,6 +70,8 @@ struct FindOutcome {
 }
 
 const MEMORY_RETRIES: usize = 5;
+// Pause between OCR scans while the Stats panel is not on screen: 10 steps of 100 ms.
+const OCR_RETRY_DELAY_STEPS: usize = 10;
 
 fn find_with_fallback(
     session: &Session,
@@ -84,20 +86,45 @@ fn find_with_fallback(
         last_error: None,
     };
     if mode == DetectionMode::Ocr {
-        match crate::screen_stats::read(session.pid) {
-            Ok(reading) => {
-                event(
-                    "hunt.ocr_completed",
-                    format_args!("game_pid={} mode=primary", session.pid),
-                );
-                outcome.screen_stats = Some(reading);
+        // OCR only locates the Stats panel, so it keeps scanning until the panel is on screen.
+        let mut scan = 0;
+        loop {
+            if stop.load(Ordering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Find cancelled.",
+                ));
             }
-            Err(error) => {
-                event(
-                    "hunt.ocr_failed",
-                    format_args!("game_pid={} mode=primary error={error}", session.pid),
-                );
-                outcome.ocr_error = Some(error.to_string());
+            scan += 1;
+            match crate::screen_stats::read(session.pid) {
+                Ok(reading) => {
+                    event(
+                        "hunt.ocr_completed",
+                        format_args!("game_pid={} mode=primary scan={scan}", session.pid),
+                    );
+                    outcome.screen_stats = Some(reading);
+                    outcome.ocr_error = None;
+                    break;
+                }
+                Err(error) => {
+                    event(
+                        "hunt.ocr_failed",
+                        format_args!(
+                            "game_pid={} mode=primary scan={scan} error={error}",
+                            session.pid
+                        ),
+                    );
+                    outcome.ocr_error = Some(error.to_string());
+                    for _ in 0..OCR_RETRY_DELAY_STEPS {
+                        if stop.load(Ordering::Acquire) {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Interrupted,
+                                "Find cancelled.",
+                            ));
+                        }
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                }
             }
         }
     }
