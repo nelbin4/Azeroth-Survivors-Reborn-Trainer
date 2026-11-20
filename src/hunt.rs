@@ -12,7 +12,6 @@ use sha2::{Digest, Sha256};
 use crate::{
     diagnostic_log::event,
     process::{Reader, Session, StatWriter},
-    session_role::{self, Role, RoleProof},
     stat_fields::{self, FIELDS},
 };
 
@@ -666,8 +665,6 @@ pub struct VerifiedStats {
 }
 
 pub struct ApplyOutcome {
-    pub lease: RoleProof,
-    pub role: Role,
     pub values: Values,
     pub applied: BTreeSet<&'static str>,
     pub skipped: BTreeMap<&'static str, String>,
@@ -681,10 +678,6 @@ fn stat_profile(plan: &Plan) -> Option<stat_fields::Profile> {
         ([4928, 3576, 3568, 7648], 7368) => Some(stat_fields::Profile::Current),
         _ => None,
     }
-}
-
-fn permits(role: Role, player_count: usize) -> bool {
-    role == Role::Host || (role == Role::Solo && player_count == 1)
 }
 
 impl VerifiedStats {
@@ -728,7 +721,6 @@ impl VerifiedStats {
         &self,
         reader: &Reader,
         header: [u8; 24],
-        lease: RoleProof,
         cancel: &AtomicBool,
     ) -> io::Result<()> {
         let mut current_header = [0; 24];
@@ -746,12 +738,6 @@ impl VerifiedStats {
                 "Selected character changed. Click Find again.",
             ));
         }
-        if !permits(lease.read(reader)?, self.count) {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "Session authority changed. Stat writes stopped.",
-            ));
-        }
         cancelled(cancel)
     }
 }
@@ -759,7 +745,6 @@ impl VerifiedStats {
 pub fn apply_stats(
     proof: &VerifiedStats,
     targets: &Targets,
-    lease: Option<RoleProof>,
     cancel: &AtomicBool,
 ) -> io::Result<ApplyOutcome> {
     let profile = stat_profile(&proof.plan)
@@ -776,22 +761,9 @@ pub fn apply_stats(
             "The requested stats have no verified instruction mapping on this build.",
         ));
     }
-    let (lease, role) =
-        match lease.and_then(|lease| lease.read(&reader).ok().map(|role| (lease, role))) {
-            Some(verified) => verified,
-            None => session_role::find(&reader, cancel)?,
-        };
-    if !permits(role, proof.count) {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Stat changes require a verified solo or co-op host session.",
-        ));
-    }
     let header = proof.verify_owner(&reader, base)?;
     let groups = stat_fields::groups(&reader, base, profile);
     let mut outcome = ApplyOutcome {
-        lease,
-        role,
         values: Values::new(),
         applied: BTreeSet::new(),
         skipped: BTreeMap::new(),
@@ -834,10 +806,10 @@ pub fn apply_stats(
         };
         if before.bytes() != after.bytes() {
             if writer.is_none() {
-                proof.verify_before_write(&reader, header, lease, cancel)?;
+                proof.verify_before_write(&reader, header, cancel)?;
                 writer = Some(StatWriter::open(&proof.session)?);
             }
-            proof.verify_before_write(&reader, header, lease, cancel)?;
+            proof.verify_before_write(&reader, header, cancel)?;
             if field.locate(&reader, proof.hero).ok().as_ref() != Some(&position)
                 || field.read(&reader, &position)?.bytes() != before.bytes()
             {
@@ -919,16 +891,6 @@ mod tests {
         plan.array = [4928, 3576, 3568, 7648];
         plan.stats = 7368;
         assert_eq!(stat_profile(&plan), Some(stat_fields::Profile::Current));
-    }
-
-    #[test]
-    fn only_solo_and_verified_host_may_write() {
-        assert!(permits(Role::Solo, 1));
-        assert!(!permits(Role::Solo, 2));
-        assert!(permits(Role::Host, 1));
-        assert!(permits(Role::Host, 2));
-        assert!(!permits(Role::Guest, 1));
-        assert!(!permits(Role::Guest, 2));
     }
 
     #[test]

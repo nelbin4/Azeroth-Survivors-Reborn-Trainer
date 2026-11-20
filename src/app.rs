@@ -17,7 +17,6 @@ use crate::{
     diagnostic_log::event,
     hunt::{self, Snapshot},
     process::{self, Games, Session},
-    session_role::RoleProof,
     settings::Settings,
     stats_ui::{STATS, Stat},
     update,
@@ -93,8 +92,6 @@ pub struct TrainerApp {
     enabled: [bool; 17],
     targets: [u32; 17],
     target_entry: String,
-    cached_role: Option<RoleProof>,
-    last_verified_role: Option<crate::session_role::Role>,
     last_apply_error: Option<String>,
     applied_stats: std::collections::BTreeSet<&'static str>,
     field_issues: std::collections::BTreeMap<&'static str, String>,
@@ -233,8 +230,6 @@ impl TrainerApp {
             enabled,
             targets,
             target_entry: targets[0].to_string(),
-            cached_role: None,
-            last_verified_role: None,
             last_apply_error: None,
             applied_stats: std::collections::BTreeSet::new(),
             field_issues: Default::default(),
@@ -272,8 +267,6 @@ impl TrainerApp {
             self.session = session;
             self.screen_stats = None;
             self.screen_stats_result = None;
-            self.cached_role = None;
-            self.last_verified_role = None;
             self.last_apply_error = None;
             self.scan = None;
             self.reset_apply();
@@ -384,7 +377,7 @@ impl TrainerApp {
                             ),
                         );
                         self.status = if snapshot.stats.is_some() {
-                            "Character verified. Choose a stat to apply.".into()
+                            "Character and stats found.".into()
                         } else if snapshot.character.is_some() {
                             let reason = match snapshot.stat_layout {
                                 hunt::MatchStatus::DifferentLayout => "player stat layout changed",
@@ -437,8 +430,6 @@ impl TrainerApp {
                     if let Some(snapshot) = &mut self.snapshot {
                         snapshot.values = result.values;
                     }
-                    self.cached_role = Some(result.lease);
-                    self.last_verified_role = Some(result.role);
                     self.field_issues = result.skipped;
                     let count = result.applied.len();
                     self.applied_stats.extend(result.applied);
@@ -453,13 +444,12 @@ impl TrainerApp {
                     );
                     event(
                         "apply.batch_finished",
-                        format_args!("role={:?} applied={count} skipped={warning}", result.role),
+                        format_args!("applied={count} skipped={warning}"),
                     );
                 }
                 Err(error) => {
                     event("apply.failed", format_args!("{error}"));
                     self.last_apply_error = Some(error.to_string());
-                    self.cached_role = None;
                     self.status = if error.kind() == io::ErrorKind::PermissionDenied {
                         format!("Apply blocked. {error}")
                     } else {
@@ -518,7 +508,7 @@ impl TrainerApp {
             self.snapshot = None;
             self.applied_stats.clear();
             self.error = None;
-            self.status = "Finding the selected character…".into();
+            self.status = "Finding character and stats…".into();
             event("hunt.requested", format_args!("game_pid={}", session.pid));
             let stop = Arc::new(AtomicBool::new(false));
             let worker_session = session.clone();
@@ -609,19 +599,13 @@ impl TrainerApp {
         }
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
-        let lease = self.cached_role;
-        self.status = if lease.is_some() {
-            "Applying stats…"
-        } else {
-            "Checking solo or host session…"
-        }
-        .into();
+        self.status = "Applying stats…".into();
         self.field_issues.clear();
         for key in targets.keys() {
             self.applied_stats.remove(key);
         }
         let result = task(context, move || {
-            hunt::apply_stats(&proof, &targets, lease, &worker_stop)
+            hunt::apply_stats(&proof, &targets, &worker_stop)
         });
         self.apply = Some(Apply { stop, result });
     }
@@ -1077,19 +1061,7 @@ impl TrainerApp {
                 );
             }
         }
-        let role = self
-            .last_verified_role
-            .map_or("Unavailable", |role| match role {
-                crate::session_role::Role::Solo => "Solo",
-                crate::session_role::Role::Host => "Host",
-                crate::session_role::Role::Guest => "Guest",
-            });
-        let _ = writeln!(
-            report,
-            "Last verified role: {role}\nCached role proof: {}\nApply in progress: {}",
-            self.cached_role.is_some(),
-            self.apply.is_some()
-        );
+        let _ = writeln!(report, "Apply in progress: {}", self.apply.is_some());
         if let Some(scan) = &self.scan {
             let _ = writeln!(
                 report,

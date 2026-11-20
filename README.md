@@ -22,11 +22,11 @@ combat mappings. Cooldown reduction and Echo are unavailable on this build.
 Enable the targets you want before clicking **Find**, or select one and click
 **Apply**. Targets outside the verified mapping are skipped.
 
-The first role check scans memory to locate the live lobby. Repeat hunts in the
-same process can revalidate the cached proof. If Windows reports a partial read
-(error 299), the scanner retries page by page. If a page remains unreadable,
-the trainer retries session verification. Use **Cancel Apply** to stop retries. Click **Find** again if the
-selected character or lobby role changes.
+**Find** discovers the game process, character, and verified stat mapping.
+Apply writes checked targets once and rechecks the selected character and
+instruction mapping before each write. If Windows reports a partial read
+(error 299), the scanner retries page by page. Click **Find** again if the
+selected character changes or a scan is interrupted.
 
 Current health follows verified maximum health. Echo requires the active Echo effect.
 
