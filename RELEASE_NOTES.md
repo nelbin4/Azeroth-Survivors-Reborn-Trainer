@@ -1,3 +1,9 @@
+Azeroth Survivor Reborn Trainer v1.0.9
+
+- Command-line options: `--mode 1` runs Memory Read and `--mode 2` runs OCR for that run only. `--find` starts Find once the game is connected. Neither option is saved.
+- OCR scans the whole game window and finds the Stats panel from its heading.
+- A large prompt asks you to open the Character panel (press C) while Find is running.
+
 Azeroth Survivor Reborn Trainer v1.0.8
 
 - Memory Read adapts to new builds: when the stat block is found by code analysis, the combat stats (Damage, Crit, Crit Damage, Speed, Armor, Regen, Pickup, Gold Bonus, Area, Targets, Luck) are located from that block. No hand-entered offsets are needed for these stats on a new build.
