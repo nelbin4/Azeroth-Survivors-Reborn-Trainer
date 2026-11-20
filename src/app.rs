@@ -1307,6 +1307,16 @@ impl eframe::App for TrainerApp {
                 if let Some(error) = &self.error {
                     ui.colored_label(Color32::LIGHT_RED, error);
                 }
+                if self.scan.is_some() {
+                    ui.label(
+                        RichText::new(
+                            "Open your Character panel (press C) and leave it open until the trainer finds the values.",
+                        )
+                        .size(22.0)
+                        .color(GOLD)
+                        .strong(),
+                    );
+                }
                 ui.add_space(8.0);
                 egui::SidePanel::right("selected-stat-editor")
                     .exact_width(EDITOR_WIDTH)
