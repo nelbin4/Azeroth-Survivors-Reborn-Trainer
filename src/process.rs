@@ -367,15 +367,30 @@ impl Reader {
 /// Holds the same process-scoped mutex name as the Python trainer.
 pub struct StatWriter {
     process: Handle,
-    _lock: Handle,
+    _lock: WriterLock,
+}
+
+struct WriterLock(Handle);
+
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Threading::ReleaseMutex;
+
+        unsafe { ReleaseMutex(self.0.0) };
+    }
 }
 
 impl StatWriter {
     pub fn open(session: &Session) -> io::Result<Self> {
         use sha2::{Digest, Sha256};
         use windows_sys::Win32::{
-            Foundation::{ERROR_ALREADY_EXISTS, GetLastError, SetLastError},
-            System::Threading::{CreateMutexW, PROCESS_VM_OPERATION, PROCESS_VM_WRITE},
+            Foundation::{
+                ERROR_ALREADY_EXISTS, GetLastError, SetLastError, WAIT_ABANDONED, WAIT_FAILED,
+                WAIT_OBJECT_0, WAIT_TIMEOUT,
+            },
+            System::Threading::{
+                CreateMutexW, PROCESS_VM_OPERATION, PROCESS_VM_WRITE, WaitForSingleObject,
+            },
         };
         let epoch = session
             .created
@@ -390,15 +405,27 @@ impl StatWriter {
             .collect();
         let (mutex, status) = unsafe {
             SetLastError(0);
-            let mutex = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+            let mutex = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
             (mutex, GetLastError())
         };
         let lock = Handle::new(mutex)?;
         if status == ERROR_ALREADY_EXISTS {
-            return Err(io::Error::other(
-                "Another trainer is already controlling Reborn.",
-            ));
+            match unsafe { WaitForSingleObject(lock.0, 0) } {
+                WAIT_OBJECT_0 | WAIT_ABANDONED => {}
+                WAIT_TIMEOUT => {
+                    return Err(io::Error::other(
+                        "Another trainer is currently applying stats to Reborn.",
+                    ));
+                }
+                WAIT_FAILED => return Err(io::Error::last_os_error()),
+                status => {
+                    return Err(io::Error::other(format!(
+                        "Unexpected trainer lock status: {status}."
+                    )));
+                }
+            }
         }
+        let lock = WriterLock(lock);
         let process = Handle::new(unsafe {
             OpenProcess(
                 PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE,

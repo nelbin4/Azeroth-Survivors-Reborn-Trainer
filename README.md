@@ -7,17 +7,17 @@ written in Rust. [Download the latest standalone EXE](https://github.com/nelbin4
 
 1. Run **Azeroth.Survivor.Reborn.Trainer.exe**, then start Reborn.
 2. Choose the stats in the **Enabled** column and set their targets in the side panel.
-3. Start a solo run or host a co-op run, then click **Find**. The trainer applies each enabled target once after verifying the selected character and session.
+3. Start a run and click **Find**. The trainer applies each enabled target once after verifying the selected character and stat mapping.
 4. Use **Apply** to set the selected stat again. Use **Find** to apply all enabled targets again.
 
-### Game updates and session checks
+### Game updates and stat discovery
 
 **Find** looks for your character and checks the discovered layout against
 supported stat layouts. A changed build fingerprint can use a compatible layout when the
 live instruction checks for the affected stat group pass. The combat and resource
 groups are checked independently. If a game update changes the layout or removes
-the matching instructions, the affected stats remain unavailable. Stat writes
-require a verified solo or co-op host session. Build `c639287405d0` has resource and
+the matching instructions, the affected stats remain unavailable. Build
+`c639287405d0` has resource and
 combat mappings. Cooldown reduction and Echo are unavailable on this build.
 Enable the targets you want before clicking **Find**, or select one and click
 **Apply**. Targets outside the verified mapping are skipped.
@@ -39,7 +39,7 @@ Open the in-game **Character** panel and click **Read Stats panel** in Advanced
 for a Windows OCR snapshot of the visible readings. The OCR snapshot is included
 in **Copy details**. Apply uses its existing verified mappings.
 
-The background log includes search, session check, update, and stat events at
+The background log includes search, process detection, update, and stat events at
 `%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-rust.log`.
 The active log is capped at 10 KB (10,000 bytes) and rotates to `reborn-rust.previous.log`. If settings are malformed,
 the trainer preserves the original and loads defaults so changes can still be saved.
