@@ -226,6 +226,7 @@ pub fn find(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role
 fn scan_role(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Role)> {
     let deadline = Instant::now() + Duration::from_secs(40);
     let mut found = None;
+    let mut rooted = 0u32;
     let mut buffer = vec![0; 1024 * 1024 + 136];
     for region in reader.private_regions()? {
         for start in (region.start..region.end).step_by(1024 * 1024) {
@@ -260,6 +261,7 @@ fn scan_role(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Rol
                 let Ok(globals) = rooted_globals(reader, state) else {
                     continue;
                 };
+                rooted += 1;
                 match lookup(reader, globals, b"AZS_RUN_LOBBY") {
                     Ok(_) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -274,7 +276,18 @@ fn scan_role(reader: &Reader, cancel: &AtomicBool) -> io::Result<(RoleProof, Rol
             }
         }
     }
-    let proof = found.ok_or_else(|| io::Error::other("Session role could not be verified."))?;
+    let proof = found.ok_or_else(|| {
+        let reason = if rooted == 0 {
+            "No compatible game session was found."
+        } else {
+            "The game session did not expose a lobby role."
+        };
+        event(
+            "apply.session_unverified",
+            format_args!("rooted_runtimes={rooted} reason={reason}"),
+        );
+        io::Error::new(io::ErrorKind::PermissionDenied, reason)
+    })?;
     let role = proof.read(reader)?;
     event("apply.session_verified", format_args!("role={role:?}"));
     Ok((proof, role))

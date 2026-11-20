@@ -5,3 +5,4 @@ Azeroth Survivor Reborn Trainer v1.0.6
 - Show layout and instruction-check results in Advanced and the diagnostic log.
 - List available stats when none of the requested targets has a verified mapping. Find still applies supported targets in a mixed selection.
 - Read the in-game Stats panel with Windows OCR from Advanced and include the visible readings in Copy details.
+- Show the number of stats found separately from Apply status and log why session verification stops.

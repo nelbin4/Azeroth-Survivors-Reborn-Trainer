@@ -460,7 +460,11 @@ impl TrainerApp {
                     event("apply.failed", format_args!("{error}"));
                     self.last_apply_error = Some(error.to_string());
                     self.cached_role = None;
-                    self.status = error.to_string();
+                    self.status = if error.kind() == io::ErrorKind::PermissionDenied {
+                        format!("Apply blocked. {error}")
+                    } else {
+                        format!("Apply stopped. {error}")
+                    };
                 }
             }
         }
@@ -963,6 +967,12 @@ impl TrainerApp {
         let verified_layout = self.snapshot.as_ref().is_some_and(|s| s.stats.is_some());
         if self.scan.is_some() || self.apply.is_some() {
             Self::work_progress(ui);
+        }
+        if let Some(snapshot) = &self.snapshot
+            && snapshot.stats.is_some()
+            && !snapshot.values.is_empty()
+        {
+            ui.colored_label(MINT, format!("Stats found: {}", snapshot.values.len()));
         }
         ui.colored_label(MINT, &self.status);
         if let Some(scan) = &self.scan {
