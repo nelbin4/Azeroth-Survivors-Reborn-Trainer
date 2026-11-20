@@ -4,28 +4,6 @@ use sha2::{Digest, Sha256};
 
 use crate::{process::Reader, stats_ui::STATS};
 
-pub const BUILD: &str = "ab1d6c071b56644d0790a78b73b8c61904d0711836161c19ccd07928fb73b765";
-const VERIFIED_FILE_SIZE: usize = 210_348_032;
-const VERIFIED_NORMALIZED: &str =
-    "480c595a25b17ebdcc4d1a2e244278e9e5c1b742b7ed025cb94d6f0dbe2286ea";
-
-pub fn matches_verified_image(bytes: &[u8], digest: &str) -> bool {
-    digest == BUILD
-        || (bytes.len() == VERIFIED_FILE_SIZE
-            && format!("{:x}", normalized_digest(bytes)) == VERIFIED_NORMALIZED)
-}
-
-fn normalized_digest(bytes: &[u8]) -> impl std::fmt::LowerHex {
-    // Exclude only the PE timestamp and checksum at this profile's header offsets.
-    let mut hash = Sha256::new();
-    hash.update(&bytes[..288]);
-    hash.update([0u8; 4]);
-    hash.update(&bytes[292..368]);
-    hash.update([0u8; 4]);
-    hash.update(&bytes[372..]);
-    hash.finalize()
-}
-
 const COMMON: &[Guard] = &[
     (
         0x6077b10,
@@ -77,6 +55,42 @@ const RESOURCE: &[Guard] = &[
         "e38630e969158985a5417d94d40ea12330b1f5f77afa0612ca12df1e9b101884",
     ),
 ];
+// Independently verified against the resource formatter and selected-player
+// resource reader in the newer player layout.
+const RESOURCE_CURRENT: &[Guard] = &[
+    (
+        0x74bc296,
+        321,
+        "12e8ea584fbdf44e5d6dfd9da1feae5c1d817a3bd9ba79b093d1a49ef5dd37f2",
+    ),
+    (
+        0xaabcb46,
+        98,
+        "103750833f0f5bd29644f12faad883c2aa6448dbbae4ba9e1b1db48d770e2fa2",
+    ),
+    (
+        0x6084fd0,
+        15,
+        "996c7a23d204142f6dac72c8e5de8d4c19800c34cdc291e5f8d70e40a6b25c21",
+    ),
+    (
+        0x6085ef0,
+        18,
+        "b816c681e97d089470f390291295f2c7a10be046fc956add12ac74e595dad0bd",
+    ),
+    (
+        0x74a9899,
+        86,
+        "a46c36d15c0e1fda6c65d1ca8936798490ab17fac1522a03a94810b1a6bb5649",
+    ),
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Profile {
+    Original,
+    CurrentResources,
+}
+
 type Guard = (usize, usize, &'static str);
 
 #[derive(Copy, Clone)]
@@ -105,7 +119,7 @@ const fn number(key: &'static str, offset: usize, base: u32, resource: bool) -> 
 }
 
 // The named-stat and resource proofs were verified by the v0.9.19 mapper
-// against the exact executable fingerprint above.
+// against game build ab1d6c071b56. Each group rechecks its live instruction bytes.
 pub const FIELDS: [Field; 17] = [
     number("damage", 0x1980, 0, false),
     number("crit", 0x1988, 8, false),
@@ -141,7 +155,7 @@ pub const FIELDS: [Field; 17] = [
     number("rerolls", 0x1a3c, 0, true),
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Groups {
     pub combat: bool,
     pub resource: bool,
@@ -155,6 +169,18 @@ impl Groups {
             self.combat
         }
     }
+
+    pub fn fields(self, profile: Profile) -> impl Iterator<Item = Field> {
+        FIELDS.into_iter().filter_map(move |mut field| {
+            if !self.supports(&field) {
+                return None;
+            }
+            if profile == Profile::CurrentResources && field.key == "rerolls" {
+                field.offset = 7564;
+            }
+            Some(field)
+        })
+    }
 }
 
 fn verified(reader: &Reader, base: usize, guards: &[Guard]) -> bool {
@@ -165,7 +191,13 @@ fn verified(reader: &Reader, base: usize, guards: &[Guard]) -> bool {
     })
 }
 
-pub fn groups(reader: &Reader, base: usize) -> Groups {
+pub fn groups(reader: &Reader, base: usize, profile: Profile) -> Groups {
+    if profile == Profile::CurrentResources {
+        return Groups {
+            combat: false,
+            resource: verified(reader, base, RESOURCE_CURRENT),
+        };
+    }
     let common = verified(reader, base, COMMON);
     Groups {
         combat: common && verified(reader, base, COMBAT),
@@ -303,14 +335,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalization_ignores_only_pe_metadata() {
-        let mut bytes = [0; 400];
-        let original = format!("{:x}", normalized_digest(&bytes));
-        bytes[288..292].fill(1);
-        bytes[368..372].fill(2);
-        assert_eq!(format!("{:x}", normalized_digest(&bytes)), original);
-        bytes[372] = 3;
-        assert_ne!(format!("{:x}", normalized_digest(&bytes)), original);
+    fn newer_resource_profile_exposes_only_proven_fields() {
+        let fields: Vec<_> = Groups {
+            combat: false,
+            resource: true,
+        }
+        .fields(Profile::CurrentResources)
+        .map(|field| field.key)
+        .collect();
+        assert_eq!(fields, ["max_health", "health", "run_gold", "rerolls"]);
     }
 
     #[test]

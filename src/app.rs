@@ -377,11 +377,14 @@ impl TrainerApp {
                         self.status = if snapshot.stats.is_some() {
                             "Character verified. Choose a stat to apply.".into()
                         } else if snapshot.character.is_some() {
-                            format!(
-                                "Build {} is read-only. Stat writes are verified for {}.",
-                                snapshot.build,
-                                &crate::stat_fields::BUILD[..12]
-                            )
+                            let reason = match snapshot.stat_layout {
+                                hunt::MatchStatus::DifferentLayout => "player stat layout changed",
+                                hunt::MatchStatus::MissingInstructionProof => {
+                                    "stat instructions did not match"
+                                }
+                                hunt::MatchStatus::Verified => "no live stat mapping",
+                            };
+                            format!("Build {}: character found, {reason}.", snapshot.build)
                         } else {
                             "No live character verified. Start a run and retry.".into()
                         };
@@ -1017,9 +1020,8 @@ impl TrainerApp {
         if let Some(snapshot) = &self.snapshot {
             let _ = writeln!(
                 report,
-                "Build: {}\nVerified stat layout: {}",
-                snapshot.build,
-                snapshot.stats.is_some()
+                "Build: {}\nStat layout check: {:?}",
+                snapshot.build, snapshot.stat_layout
             );
             if let Some(character) = &snapshot.character {
                 let _ = writeln!(

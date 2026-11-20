@@ -12,11 +12,13 @@ written in Rust. [Download the latest standalone EXE](https://github.com/nelbin4
 
 ### Game updates and session checks
 
-**Find** looks for your character on newer builds. Stat writes use the verified
-layout from build `ab1d6c071b56`. A different executable fingerprint can use
-that layout if every byte apart from the PE timestamp and checksum matches and
-the live checks pass. Changes to game code or data require a verified mapping.
-Stat writes require a verified solo or co-op host session.
+**Find** looks for your character and checks the discovered layout against
+supported stat layouts. A changed build fingerprint can use a compatible layout when the
+live instruction checks for the affected stat group pass. The combat and resource
+groups are checked independently. If a game update changes the layout or removes
+the matching instructions, the affected stats remain unavailable. Stat writes
+require a verified solo or co-op host session. Build `c639287405d0` has a resource
+mapping for current health, maximum health, run gold, and rerolls.
 
 The first role check scans memory to locate the live lobby. Repeat hunts in the
 same process can revalidate the cached proof. If Windows reports a partial read
@@ -55,6 +57,11 @@ previous EXE.
 - `src/` contains the Rust trainer, stat verification, Windows integration, and updater.
 - `assets/` contains the app icon and logo.
 - `.github/workflows/release.yml` builds and tests on Windows and publishes the standalone EXE for newer versions on `main`.
+
+### Local folders
+
+- `releases/<version>/` contains downloaded standalone EXEs. Older Python release bundles and ZIP archives are grouped under `releases/legacy/`.
+- `backups/workspace-cleanup/` contains archived diagnostics, test builds, generated caches, and the older local Reborn source.
 
 The Python trainer remains available in the [v0.9.19 release and source tag](https://github.com/nelbin4/Azeroth-Survivors-Reborn-Trainer/releases/tag/v0.9.19).
 See [LICENSE](LICENSE).

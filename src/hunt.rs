@@ -22,7 +22,6 @@ type Guard = (usize, Vec<u8>);
 #[derive(Clone, Debug)]
 struct Plan {
     build: String,
-    verified_image: bool,
     array: Array,
     name: usize,
     stats: usize,
@@ -35,6 +34,14 @@ pub struct Snapshot {
     pub character: Option<Character>,
     pub stats: Option<VerifiedStats>,
     pub values: Values,
+    pub stat_layout: MatchStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatchStatus {
+    DifferentLayout,
+    MissingInstructionProof,
+    Verified,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -331,7 +338,6 @@ fn analyze(blob: &[u8], stop: &AtomicBool) -> io::Result<Plan> {
     let digest = format!("{:x}", Sha256::digest(blob));
     Ok(Plan {
         build: digest[..12].into(),
-        verified_image: stat_fields::matches_verified_image(blob, &digest),
         array,
         name: *name,
         stats,
@@ -579,8 +585,27 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
         ),
     );
     let found = found.into_iter().next();
+    let profile = stat_profile(&plan);
+    let (stat_layout, groups) = if let Some(profile) = profile {
+        let groups = stat_fields::groups(&reader, base, profile);
+        let status = if groups.combat || groups.resource {
+            MatchStatus::Verified
+        } else {
+            MatchStatus::MissingInstructionProof
+        };
+        (status, groups)
+    } else {
+        (MatchStatus::DifferentLayout, stat_fields::Groups::default())
+    };
+    event(
+        "hunt.stat_mapping",
+        format_args!(
+            "build={} result={stat_layout:?} combat={} resource={}",
+            plan.build, groups.combat, groups.resource
+        ),
+    );
     let stats = found.as_ref().and_then(|(address, character)| {
-        supported(&plan).then(|| VerifiedStats {
+        (stat_layout == MatchStatus::Verified).then(|| VerifiedStats {
             session: session.clone(),
             plan: plan.clone(),
             hero: *address,
@@ -594,11 +619,10 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
     });
     let values = stats
         .as_ref()
-        .map(|stats| {
-            let groups = stat_fields::groups(&reader, base);
-            FIELDS
-                .iter()
-                .filter(|field| groups.supports(field))
+        .zip(profile)
+        .map(|(stats, profile)| {
+            groups
+                .fields(profile)
                 .filter_map(|field| {
                     let location = field.locate(&reader, stats.hero).ok()?;
                     Some((
@@ -614,6 +638,7 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
         character: found.map(|(_, character)| character),
         stats,
         values,
+        stat_layout,
     })
 }
 
@@ -641,11 +666,14 @@ pub struct ApplyOutcome {
     pub skipped: BTreeMap<&'static str, String>,
 }
 
-fn supported(plan: &Plan) -> bool {
-    plan.verified_image
-        && plan.array == [4768, 3520, 3512, 6800]
-        && plan.name == 4880
-        && plan.stats == 6520
+fn stat_profile(plan: &Plan) -> Option<stat_fields::Profile> {
+    match (plan.array, plan.stats) {
+        ([4768, 3520, 3512, 6800], 6520) if plan.name == 4880 => {
+            Some(stat_fields::Profile::Original)
+        }
+        ([4928, 3576, 3568, 7648], 7368) => Some(stat_fields::Profile::CurrentResources),
+        _ => None,
+    }
 }
 
 fn permits(role: Role, player_count: usize) -> bool {
@@ -727,13 +755,20 @@ pub fn apply_stats(
     lease: Option<RoleProof>,
     cancel: &AtomicBool,
 ) -> io::Result<ApplyOutcome> {
-    if !supported(&proof.plan) {
-        return Err(io::Error::other(
-            "This build has no verified Rust stat mapping.",
-        ));
-    }
+    let profile = stat_profile(&proof.plan)
+        .ok_or_else(|| io::Error::other("This build has no verified stat mapping."))?;
     cancelled(cancel)?;
     let reader = Reader::open(&proof.session)?;
+    let base = reader.module_base(&proof.session)?;
+    let groups = stat_fields::groups(&reader, base, profile);
+    if !FIELDS
+        .iter()
+        .any(|field| targets.contains_key(field.key) && groups.supports(field))
+    {
+        return Err(io::Error::other(
+            "The requested stats have no verified instruction mapping on this build.",
+        ));
+    }
     let (lease, role) =
         match lease.and_then(|lease| lease.read(&reader).ok().map(|role| (lease, role))) {
             Some(verified) => verified,
@@ -745,9 +780,8 @@ pub fn apply_stats(
             "Stat changes require a verified solo or co-op host session.",
         ));
     }
-    let base = reader.module_base(&proof.session)?;
     let header = proof.verify_owner(&reader, base)?;
-    let groups = stat_fields::groups(&reader, base);
+    let groups = stat_fields::groups(&reader, base, profile);
     let mut outcome = ApplyOutcome {
         lease,
         role,
@@ -755,17 +789,16 @@ pub fn apply_stats(
         applied: BTreeSet::new(),
         skipped: BTreeMap::new(),
     };
-    let mut writer = None;
     for field in &FIELDS {
-        let target = targets.get(field.key).copied();
-        if !groups.supports(field) {
-            if target.is_some() {
-                outcome
-                    .skipped
-                    .insert(field.key, "Field proof failed.".into());
-            }
-            continue;
+        if targets.contains_key(field.key) && !groups.supports(field) {
+            outcome
+                .skipped
+                .insert(field.key, "Field proof failed.".into());
         }
+    }
+    let mut writer = None;
+    for field in groups.fields(profile) {
+        let target = targets.get(field.key).copied();
         let position = field
             .locate(&reader, proof.hero)
             .and_then(|position| Ok((field.read(&reader, &position)?, position)));
@@ -865,21 +898,23 @@ mod tests {
     }
 
     #[test]
-    fn stat_mapping_requires_a_verified_image_and_matching_layout() {
+    fn compatible_record_shape_is_independent_of_the_build_id() {
         let mut plan = Plan {
-            build: stat_fields::BUILD[..12].into(),
-            verified_image: true,
+            build: "different".into(),
             array: [4768, 3520, 3512, 6800],
             name: 4880,
             stats: 6520,
             guards: vec![],
         };
-        assert!(supported(&plan));
+        assert_eq!(stat_profile(&plan), Some(stat_fields::Profile::Original));
         plan.stats += 4;
-        assert!(!supported(&plan));
-        plan.stats -= 4;
-        plan.verified_image = false;
-        assert!(!supported(&plan));
+        assert_eq!(stat_profile(&plan), None);
+        plan.array = [4928, 3576, 3568, 7648];
+        plan.stats = 7368;
+        assert_eq!(
+            stat_profile(&plan),
+            Some(stat_fields::Profile::CurrentResources)
+        );
     }
 
     #[test]

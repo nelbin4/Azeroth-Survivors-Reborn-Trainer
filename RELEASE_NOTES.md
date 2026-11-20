@@ -1,9 +1,5 @@
-Azeroth Survivor Reborn Trainer v1.0.5
+Azeroth Survivor Reborn Trainer v1.0.6
 
-- Find applies enabled targets once after verifying the selected character and session.
-- Apply sets the selected stat once. Removed freeze controls and periodic stat writes.
-- Retry partial session reads before applying. Cancel Apply stops the check.
-- Show the latest 40 log lines in Advanced and include them when copying details.
-- Use a narrower fixed window, distinct checkbox colors, and simple Found and Applied row statuses.
-- Place the version status to the right of Check updates in the footer.
-- Cap the active log at 10 KB.
+- Check live stat instructions per group so a changed build fingerprint alone does not block compatible layouts.
+- Add a verified resource mapping for health, maximum health, run gold, and rerolls on game build c639287405d0. Combat stats still require a verified mapping.
+- Show layout and instruction-check results in Advanced and the diagnostic log.
