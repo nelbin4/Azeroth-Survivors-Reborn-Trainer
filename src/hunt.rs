@@ -676,6 +676,10 @@ fn stat_profile(plan: &Plan) -> Option<stat_fields::Profile> {
             Some(stat_fields::Profile::Original)
         }
         ([4928, 3576, 3568, 7648], 7368) => Some(stat_fields::Profile::Current),
+        // Any other build: the stat block was found by code analysis, so its combat fields follow it.
+        (_, stats) if stats.is_multiple_of(4) && (0x100..0x10000).contains(&stats) => {
+            Some(stat_fields::Profile::Block { stats })
+        }
         _ => None,
     }
 }
@@ -887,6 +891,11 @@ mod tests {
         };
         assert_eq!(stat_profile(&plan), Some(stat_fields::Profile::Original));
         plan.stats += 4;
+        assert_eq!(
+            stat_profile(&plan),
+            Some(stat_fields::Profile::Block { stats: 6524 })
+        );
+        plan.stats = 3;
         assert_eq!(stat_profile(&plan), None);
         plan.array = [4928, 3576, 3568, 7648];
         plan.stats = 7368;

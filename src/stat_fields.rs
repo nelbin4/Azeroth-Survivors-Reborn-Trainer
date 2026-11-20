@@ -129,7 +129,26 @@ const COMBAT_CURRENT: &[Guard] = &[
 pub enum Profile {
     Original,
     Current,
+    /// A build whose stat block was found by code analysis. Combat fields sit at
+    /// fixed positions inside that block, in the order shared by the builds above.
+    Block { stats: usize },
 }
+
+// Offsets of the combat stats from the start of the 16-entry stat block. The
+// same positions hold in both verified layouts.
+const BLOCK_FIELDS: [(&str, usize); 11] = [
+    ("damage", 8),
+    ("crit", 16),
+    ("crit_damage", 20),
+    ("speed", 24),
+    ("armor", 28),
+    ("regen", 32),
+    ("pickup", 44),
+    ("gold_bonus", 48),
+    ("area", 52),
+    ("targets", 56),
+    ("luck", 60),
+];
 
 type Guard = (usize, usize, &'static str);
 
@@ -204,8 +223,8 @@ pub struct Groups {
 impl Groups {
     pub fn map_field(self, profile: Profile, mut field: Field) -> Option<Field> {
         if field.resource {
-            if !self.resource {
-                return None;
+            if !self.resource || matches!(profile, Profile::Block { .. }) {
+                return None; // resource offsets are only proven for the two verified layouts
             }
             if profile == Profile::Current && field.key == "rerolls" {
                 field.offset = 7564;
@@ -213,6 +232,11 @@ impl Groups {
         } else {
             if !self.combat {
                 return None;
+            }
+            if let Profile::Block { stats } = profile {
+                let (_, relative) = BLOCK_FIELDS.iter().find(|(key, _)| *key == field.key)?;
+                field.offset = stats + relative;
+                return Some(field);
             }
             if profile == Profile::Current {
                 let relative = match field.key {
@@ -251,6 +275,13 @@ fn verified(reader: &Reader, base: usize, guards: &[Guard]) -> bool {
 }
 
 pub fn groups(reader: &Reader, base: usize, profile: Profile) -> Groups {
+    if let Profile::Block { .. } = profile {
+        // The stat block itself was located by code analysis; its position is the proof.
+        return Groups {
+            combat: true,
+            resource: false,
+        };
+    }
     if profile == Profile::Current {
         return Groups {
             combat: verified(reader, base, COMBAT_CURRENT),
@@ -430,6 +461,58 @@ mod tests {
                 ("luck", 60),
             ]
         );
+    }
+
+    #[test]
+    fn block_layout_places_combat_fields_like_the_verified_builds() {
+        let combat = Groups {
+            combat: true,
+            resource: false,
+        };
+        let original: Vec<_> = combat
+            .fields(Profile::Original)
+            .filter(|field| BLOCK_FIELDS.iter().any(|(key, _)| *key == field.key))
+            .map(|field| (field.key, field.offset - 6520))
+            .collect();
+        assert_eq!(original.len(), BLOCK_FIELDS.len());
+        let block: Vec<_> = combat
+            .fields(Profile::Block { stats: 6520 })
+            .map(|field| (field.key, field.offset - 6520))
+            .collect();
+        assert_eq!(block.len(), BLOCK_FIELDS.len());
+        for (key, offset) in &block {
+            assert!(
+                original.contains(&(*key, *offset)),
+                "{key} differs from the verified layout"
+            );
+        }
+        let current: Vec<_> = combat
+            .fields(Profile::Current)
+            .map(|field| (field.key, field.offset - 7368))
+            .collect();
+        for (key, offset) in &current {
+            assert!(block.contains(&(*key, *offset)), "{key} differs from Current");
+        }
+    }
+
+    #[test]
+    fn block_layout_leaves_unproven_fields_unmapped() {
+        let block = Profile::Block { stats: 0x1000 };
+        let resource = Groups {
+            combat: false,
+            resource: true,
+        };
+        assert_eq!(resource.fields(block).count(), 0);
+        let fields: Vec<_> = Groups {
+            combat: true,
+            resource: false,
+        }
+        .fields(block)
+        .map(|field| field.key)
+        .collect();
+        assert!(!fields.contains(&"echo"));
+        assert!(!fields.contains(&"cooldown"));
+        assert_eq!(fields.len(), BLOCK_FIELDS.len());
     }
 
     #[test]
