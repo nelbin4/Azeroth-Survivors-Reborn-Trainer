@@ -85,10 +85,50 @@ const RESOURCE_CURRENT: &[Guard] = &[
     ),
 ];
 
+// The current formatter inserts an extra argument before Echo. The proof
+// includes the formatter, its description, and the scalar formatting routines.
+const COMBAT_CURRENT: &[Guard] = &[
+    (
+        0x74c6a27,
+        4112,
+        "dff9ae784e000c83625ecbbbb21e7fb5568a2c63536ee3cb48360f1c228a2523",
+    ),
+    (
+        0xaabcd2b,
+        190,
+        "fe9d71bcab81d18f1d98a008092c984d1c686cb7955155c4aa627204acb41133",
+    ),
+    (
+        0x8058160,
+        68,
+        "b24097390346e6a1157d258615a98664327a63b749e11cd25eb15da7e81f2740",
+    ),
+    (
+        0x80581b0,
+        100,
+        "aa8bb21c78776274b9cf958f54703bfa25508ab2c41b7944c57a65edcffb6e0a",
+    ),
+    (
+        0x8501de0,
+        4,
+        "2238f30df488055daf5e8f362cf904e370011a172d20df193c1b7ae8e5db8e01",
+    ),
+    (
+        0x6084fd0,
+        15,
+        "996c7a23d204142f6dac72c8e5de8d4c19800c34cdc291e5f8d70e40a6b25c21",
+    ),
+    (
+        0x6085ef0,
+        18,
+        "b816c681e97d089470f390291295f2c7a10be046fc956add12ac74e595dad0bd",
+    ),
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Profile {
     Original,
-    CurrentResources,
+    Current,
 }
 
 type Guard = (usize, usize, &'static str);
@@ -162,24 +202,43 @@ pub struct Groups {
 }
 
 impl Groups {
-    pub fn supports(self, field: &Field) -> bool {
+    pub fn map_field(self, profile: Profile, mut field: Field) -> Option<Field> {
         if field.resource {
-            self.resource
+            if !self.resource {
+                return None;
+            }
+            if profile == Profile::Current && field.key == "rerolls" {
+                field.offset = 7564;
+            }
         } else {
-            self.combat
+            if !self.combat {
+                return None;
+            }
+            if profile == Profile::Current {
+                let relative = match field.key {
+                    "damage" => 8,
+                    "crit" => 16,
+                    "crit_damage" => 20,
+                    "speed" => 24,
+                    "armor" => 28,
+                    "regen" => 32,
+                    "pickup" => 44,
+                    "gold_bonus" => 48,
+                    "area" => 52,
+                    "targets" => 56,
+                    "luck" => 60,
+                    _ => return None,
+                };
+                field.offset = 7368 + relative;
+            }
         }
+        Some(field)
     }
 
     pub fn fields(self, profile: Profile) -> impl Iterator<Item = Field> {
-        FIELDS.into_iter().filter_map(move |mut field| {
-            if !self.supports(&field) {
-                return None;
-            }
-            if profile == Profile::CurrentResources && field.key == "rerolls" {
-                field.offset = 7564;
-            }
-            Some(field)
-        })
+        FIELDS
+            .into_iter()
+            .filter_map(move |field| self.map_field(profile, field))
     }
 }
 
@@ -192,9 +251,9 @@ fn verified(reader: &Reader, base: usize, guards: &[Guard]) -> bool {
 }
 
 pub fn groups(reader: &Reader, base: usize, profile: Profile) -> Groups {
-    if profile == Profile::CurrentResources {
+    if profile == Profile::Current {
         return Groups {
-            combat: false,
+            combat: verified(reader, base, COMBAT_CURRENT),
             resource: verified(reader, base, RESOURCE_CURRENT),
         };
     }
@@ -340,10 +399,37 @@ mod tests {
             combat: false,
             resource: true,
         }
-        .fields(Profile::CurrentResources)
+        .fields(Profile::Current)
         .map(|field| field.key)
         .collect();
         assert_eq!(fields, ["max_health", "health", "run_gold", "rerolls"]);
+    }
+
+    #[test]
+    fn current_combat_mapping_uses_verified_slots_only() {
+        let fields: Vec<_> = Groups {
+            combat: true,
+            resource: false,
+        }
+        .fields(Profile::Current)
+        .map(|field| (field.key, field.offset - 7368))
+        .collect();
+        assert_eq!(
+            fields,
+            [
+                ("damage", 8),
+                ("crit", 16),
+                ("crit_damage", 20),
+                ("area", 52),
+                ("targets", 56),
+                ("armor", 28),
+                ("regen", 32),
+                ("speed", 24),
+                ("pickup", 44),
+                ("gold_bonus", 48),
+                ("luck", 60),
+            ]
+        );
     }
 
     #[test]

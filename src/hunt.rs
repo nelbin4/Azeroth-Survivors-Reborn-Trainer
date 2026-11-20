@@ -35,6 +35,7 @@ pub struct Snapshot {
     pub stats: Option<VerifiedStats>,
     pub values: Values,
     pub stat_layout: MatchStatus,
+    pub mapped_stats: BTreeSet<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -617,6 +618,11 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
             stamp: (file.len(), file.modified().ok()),
         })
     });
+    let mapped_stats = profile
+        .filter(|_| stats.is_some())
+        .into_iter()
+        .flat_map(|profile| groups.fields(profile).map(|field| field.key))
+        .collect();
     let values = stats
         .as_ref()
         .zip(profile)
@@ -639,6 +645,7 @@ pub fn find(session: &Session, stop: &AtomicBool) -> io::Result<Snapshot> {
         stats,
         values,
         stat_layout,
+        mapped_stats,
     })
 }
 
@@ -671,7 +678,7 @@ fn stat_profile(plan: &Plan) -> Option<stat_fields::Profile> {
         ([4768, 3520, 3512, 6800], 6520) if plan.name == 4880 => {
             Some(stat_fields::Profile::Original)
         }
-        ([4928, 3576, 3568, 7648], 7368) => Some(stat_fields::Profile::CurrentResources),
+        ([4928, 3576, 3568, 7648], 7368) => Some(stat_fields::Profile::Current),
         _ => None,
     }
 }
@@ -761,9 +768,9 @@ pub fn apply_stats(
     let reader = Reader::open(&proof.session)?;
     let base = reader.module_base(&proof.session)?;
     let groups = stat_fields::groups(&reader, base, profile);
-    if !FIELDS
-        .iter()
-        .any(|field| targets.contains_key(field.key) && groups.supports(field))
+    if !groups
+        .fields(profile)
+        .any(|field| targets.contains_key(field.key))
     {
         return Err(io::Error::other(
             "The requested stats have no verified instruction mapping on this build.",
@@ -790,7 +797,7 @@ pub fn apply_stats(
         skipped: BTreeMap::new(),
     };
     for field in &FIELDS {
-        if targets.contains_key(field.key) && !groups.supports(field) {
+        if targets.contains_key(field.key) && groups.map_field(profile, *field).is_none() {
             outcome
                 .skipped
                 .insert(field.key, "Field proof failed.".into());
@@ -911,10 +918,7 @@ mod tests {
         assert_eq!(stat_profile(&plan), None);
         plan.array = [4928, 3576, 3568, 7648];
         plan.stats = 7368;
-        assert_eq!(
-            stat_profile(&plan),
-            Some(stat_fields::Profile::CurrentResources)
-        );
+        assert_eq!(stat_profile(&plan), Some(stat_fields::Profile::Current));
     }
 
     #[test]

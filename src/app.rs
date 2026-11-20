@@ -571,10 +571,29 @@ impl TrainerApp {
     }
 
     fn start_apply(&mut self, context: &egui::Context, targets: hunt::Targets) {
-        let Some(proof) = self.snapshot.as_ref().and_then(|s| s.stats.clone()) else {
-            self.reset_apply();
+        let Some(snapshot) = self.snapshot.as_ref() else {
             return;
         };
+        let Some(proof) = snapshot.stats.clone() else {
+            return;
+        };
+        if !targets
+            .keys()
+            .any(|key| snapshot.mapped_stats.contains(key))
+        {
+            let supported = STATS
+                .iter()
+                .filter(|stat| snapshot.mapped_stats.contains(stat.key))
+                .map(|stat| stat.label)
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.status = format!("No requested stats are available. Try {supported}.");
+            event(
+                "apply.no_mapped_targets",
+                format_args!("build={} available={supported}", snapshot.build),
+            );
+            return;
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let lease = self.cached_role;
@@ -961,7 +980,11 @@ impl TrainerApp {
         if reply.lost_focus() {
             self.commit_target();
         }
-        let can_apply = verified_layout
+        let selected_mapped = self
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| s.mapped_stats.contains(stat.key));
+        let can_apply = selected_mapped
             && self.apply.is_none()
             && self.stop_result.is_none()
             && self.session.is_some()
@@ -984,6 +1007,8 @@ impl TrainerApp {
         });
         let hint = if let Some(error) = self.field_issues.get(stat.key) {
             error.as_str()
+        } else if verified_layout && !selected_mapped {
+            "This stat is unavailable on the detected build."
         } else if stat.key == "health" {
             "Current health follows verified maximum health."
         } else {

@@ -17,8 +17,10 @@ supported stat layouts. A changed build fingerprint can use a compatible layout 
 live instruction checks for the affected stat group pass. The combat and resource
 groups are checked independently. If a game update changes the layout or removes
 the matching instructions, the affected stats remain unavailable. Stat writes
-require a verified solo or co-op host session. Build `c639287405d0` has a resource
-mapping for current health, maximum health, run gold, and rerolls.
+require a verified solo or co-op host session. Build `c639287405d0` has resource and
+combat mappings. Cooldown reduction and Echo are unavailable on this build.
+Enable the targets you want before clicking **Find**, or select one and click
+**Apply**. Targets outside the verified mapping are skipped.
 
 The first role check scans memory to locate the live lobby. Repeat hunts in the
 same process can revalidate the cached proof. If Windows reports a partial read
