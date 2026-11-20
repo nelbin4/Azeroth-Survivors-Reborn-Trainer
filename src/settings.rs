@@ -5,6 +5,13 @@ use std::{
 
 use serde_json::{Map, Value};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DetectionMode {
+    Ocr,
+    #[default]
+    MemoryRead,
+}
+
 const DIRECTORY: &str = "Azeroth Survivor Reborn Trainer";
 const FILE: &str = "reborn-settings.json";
 
@@ -79,6 +86,21 @@ impl Settings {
 
     pub fn stat_preferences(&self) -> Option<&Value> {
         self.fields.get("stats")
+    }
+
+    pub fn detection_mode(&self) -> DetectionMode {
+        match self.fields.get("detection_mode").and_then(Value::as_str) {
+            Some("ocr") => DetectionMode::Ocr,
+            _ => DetectionMode::MemoryRead,
+        }
+    }
+
+    pub fn set_detection_mode(&mut self, mode: DetectionMode) -> io::Result<()> {
+        let value = match mode {
+            DetectionMode::MemoryRead => "memory_read",
+            DetectionMode::Ocr => "ocr",
+        };
+        self.save("detection_mode", Value::String(value.into()))
     }
 
     pub fn set_game_path(&mut self, path: &Path) -> io::Result<()> {

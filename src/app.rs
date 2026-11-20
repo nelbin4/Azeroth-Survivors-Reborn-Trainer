@@ -17,7 +17,7 @@ use crate::{
     diagnostic_log::event,
     hunt::{self, Snapshot},
     process::{self, Games, Session},
-    settings::Settings,
+    settings::{DetectionMode, Settings},
     stats_ui::{STATS, Stat},
     update,
 };
@@ -58,7 +58,116 @@ struct Search {
     stop: Arc<AtomicBool>,
     started: Instant,
     session: Session,
-    result: Receiver<io::Result<Snapshot>>,
+    result: Receiver<io::Result<FindOutcome>>,
+}
+
+struct FindOutcome {
+    snapshot: Option<Snapshot>,
+    attempts: usize,
+    screen_stats: Option<String>,
+    ocr_error: Option<String>,
+    last_error: Option<String>,
+}
+
+const MEMORY_RETRIES: usize = 5;
+
+fn find_with_fallback(
+    session: &Session,
+    stop: &AtomicBool,
+    mode: DetectionMode,
+) -> io::Result<FindOutcome> {
+    let mut outcome = FindOutcome {
+        snapshot: None,
+        attempts: 0,
+        screen_stats: None,
+        ocr_error: None,
+        last_error: None,
+    };
+    if mode == DetectionMode::Ocr {
+        match crate::screen_stats::read(session.pid) {
+            Ok(reading) => {
+                event(
+                    "hunt.ocr_completed",
+                    format_args!("game_pid={} mode=primary", session.pid),
+                );
+                outcome.screen_stats = Some(reading);
+            }
+            Err(error) => {
+                event(
+                    "hunt.ocr_failed",
+                    format_args!("game_pid={} mode=primary error={error}", session.pid),
+                );
+                outcome.ocr_error = Some(error.to_string());
+            }
+        }
+    }
+    let attempts = if mode == DetectionMode::MemoryRead {
+        MEMORY_RETRIES + 1
+    } else {
+        1
+    };
+    for attempt in 1..=attempts {
+        if stop.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Find cancelled.",
+            ));
+        }
+        outcome.attempts = attempt;
+        event(
+            "hunt.attempt",
+            format_args!("game_pid={} attempt={} mode={mode:?}", session.pid, attempt),
+        );
+        match hunt::find(session, stop) {
+            Ok(snapshot) if snapshot.stats.is_some() => {
+                outcome.snapshot = Some(snapshot);
+                return Ok(outcome);
+            }
+            Ok(snapshot) => {
+                outcome.last_error = Some(format!(
+                    "Build {} did not produce a verified stat mapping.",
+                    snapshot.build
+                ));
+                outcome.snapshot = Some(snapshot);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+            Err(error) => outcome.last_error = Some(error.to_string()),
+        }
+        if attempt < attempts {
+            for _ in 0..5 {
+                if stop.load(Ordering::Acquire) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "Find cancelled.",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    if mode == DetectionMode::MemoryRead {
+        event(
+            "hunt.ocr_fallback_started",
+            format_args!("game_pid={} attempts={}", session.pid, outcome.attempts),
+        );
+        match crate::screen_stats::read(session.pid) {
+            Ok(reading) => {
+                event(
+                    "hunt.ocr_completed",
+                    format_args!("game_pid={} mode=fallback", session.pid),
+                );
+                outcome.screen_stats = Some(reading);
+            }
+            Err(error) => {
+                event(
+                    "hunt.ocr_failed",
+                    format_args!("game_pid={} mode=fallback error={error}", session.pid),
+                );
+                outcome.ocr_error = Some(error.to_string());
+            }
+        }
+    }
+    Ok(outcome)
 }
 
 impl Drop for Search {
@@ -365,7 +474,18 @@ impl TrainerApp {
                 && !search.stop.load(Ordering::Relaxed)
             {
                 match outcome {
-                    Ok(snapshot) => {
+                    Ok(outcome) => {
+                        if let Some(stats) = outcome.screen_stats {
+                            self.screen_stats = Some(stats);
+                        }
+                        let Some(snapshot) = outcome.snapshot else {
+                            self.status = outcome.ocr_error.unwrap_or_else(|| {
+                                outcome
+                                    .last_error
+                                    .unwrap_or_else(|| "No character or stats were found.".into())
+                            });
+                            return;
+                        };
                         event(
                             "hunt.finished",
                             format_args!(
@@ -386,9 +506,24 @@ impl TrainerApp {
                                 }
                                 hunt::MatchStatus::Verified => "no live stat mapping",
                             };
-                            format!("Build {}: character found, {reason}.", snapshot.build)
+                            let ocr_note = if self.screen_stats.is_some() {
+                                " OCR captured the visible panel; it cannot verify writable memory fields."
+                            } else {
+                                " Open the Character panel with C for OCR fallback."
+                            };
+                            format!(
+                                "Build {}: character found, {reason}.{ocr_note}",
+                                snapshot.build
+                            )
                         } else {
-                            "No live character verified. Start a run and retry.".into()
+                            let detail = outcome
+                                .ocr_error
+                                .or(outcome.last_error)
+                                .unwrap_or_else(|| "No live character verified.".into());
+                            format!(
+                                "{detail} ({} memory attempts). Open the Character panel with C for OCR fallback.",
+                                outcome.attempts
+                            )
                         };
                         let verified = snapshot.stats.is_some();
                         self.snapshot = Some(snapshot);
@@ -513,7 +648,10 @@ impl TrainerApp {
             let stop = Arc::new(AtomicBool::new(false));
             let worker_session = session.clone();
             let worker_stop = stop.clone();
-            let result = task(context, move || hunt::find(&worker_session, &worker_stop));
+            let mode = self.settings.detection_mode();
+            let result = task(context, move || {
+                find_with_fallback(&worker_session, &worker_stop, mode)
+            });
             self.scan = Some(Search {
                 stop,
                 started: Instant::now(),
@@ -800,7 +938,7 @@ impl TrainerApp {
         ))
     }
 
-    fn stats_table(&mut self, ui: &mut egui::Ui, width: f32) {
+    fn stats_table(&mut self, context: &egui::Context, ui: &mut egui::Ui, width: f32) {
         let titles = ["Enabled", "Stat", "Current", "Target", "Status"];
         let spacing = ui.spacing().item_spacing.x * (titles.len() - 1) as f32;
         let widths = [
@@ -813,6 +951,7 @@ impl TrainerApp {
         ui.spacing_mut().item_spacing.y = 2.0;
         let mut selected = self.selected;
         let mut preferences_changed = false;
+        let mut auto_apply = hunt::Targets::new();
         let mut table = TableBuilder::new(ui)
             .striped(true)
             .sense(egui::Sense::click())
@@ -867,6 +1006,13 @@ impl TrainerApp {
                                     if response.changed() {
                                         self.enabled[index] = checked;
                                         preferences_changed = true;
+                                        if checked
+                                            && let Some(snapshot) = &self.snapshot
+                                            && snapshot.stats.is_some()
+                                            && snapshot.mapped_stats.contains(stat.key)
+                                        {
+                                            auto_apply.insert(stat.key, self.targets[index]);
+                                        }
                                     }
                                 },
                             );
@@ -898,6 +1044,9 @@ impl TrainerApp {
         }
         if preferences_changed {
             self.save_preferences();
+        }
+        if !auto_apply.is_empty() {
+            self.start_apply(context, auto_apply);
         }
     }
 
@@ -1024,8 +1173,12 @@ impl TrainerApp {
         use std::fmt::Write as _;
 
         let mut report = format!(
-            "Trainer {VERSION} / Windows x64\n\nSESSION\n{}\n",
-            self.status
+            "Trainer {VERSION} / Windows x64\n\nSESSION\n{}\nDetection mode: {}\n",
+            self.status,
+            match self.settings.detection_mode() {
+                DetectionMode::MemoryRead => "Memory Read",
+                DetectionMode::Ocr => "OCR",
+            },
         );
         if let Some(session) = &self.session {
             let _ = writeln!(
@@ -1168,7 +1321,7 @@ impl eframe::App for TrainerApp {
                     .frame(egui::Frame::new())
                     .show_inside(ui, |ui| {
                         let width = ui.available_width();
-                        self.stats_table(ui, width);
+                        self.stats_table(context, ui, width);
                     });
             });
         self.stop_confirmation(context);
@@ -1195,6 +1348,36 @@ impl eframe::App for TrainerApp {
                 .open(&mut self.show_details)
                 .default_width(680.0)
                 .show(context, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Detection Mode");
+                        let mut mode = self.settings.detection_mode();
+                        egui::ComboBox::from_id_salt("detection-mode")
+                            .selected_text(match mode {
+                                DetectionMode::MemoryRead => "Memory Read",
+                                DetectionMode::Ocr => "OCR",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut mode,
+                                    DetectionMode::MemoryRead,
+                                    "Memory Read",
+                                );
+                                ui.selectable_value(&mut mode, DetectionMode::Ocr, "OCR");
+                            });
+                        if mode != self.settings.detection_mode()
+                            && let Err(error) = self.settings.set_detection_mode(mode)
+                        {
+                            self.error = Some(format!("Could not save detection mode: {error}"));
+                        }
+                    });
+                    ui.label(match self.settings.detection_mode() {
+                        DetectionMode::MemoryRead => {
+                            "Memory Read is default. Find retries five times, then reads the visible Stats panel with OCR."
+                        }
+                        DetectionMode::Ocr => {
+                            "OCR captures visible values first. Open the Character panel with C. OCR readings do not verify writable fields."
+                        }
+                    });
                     ui.horizontal(|ui| {
                         if ui.button("Copy details").clicked() {
                             event("diagnostics.copied", format_args!(""));

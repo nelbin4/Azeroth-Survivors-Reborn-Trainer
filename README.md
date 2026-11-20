@@ -22,6 +22,15 @@ combat mappings. Cooldown reduction and Echo are unavailable on this build.
 Enable the targets you want before clicking **Find**, or select one and click
 **Apply**. Targets outside the verified mapping are skipped.
 
+In **Advanced → Detection details**, **Detection Mode** defaults to **Memory Read**.
+Find makes one initial memory discovery attempt and retries up to five times if
+it does not verify a stat mapping. It then captures the visible Stats panel using
+Windows OCR. Open the in-game Character panel with **C** for that fallback.
+Selecting **OCR** captures the panel first, then performs memory discovery. OCR
+readings are diagnostic references; they do not establish writable memory
+addresses, so the trainer only applies stats backed by a verified memory mapping.
+The selected mode is saved in local settings.
+
 **Find** discovers the game process, character, and verified stat mapping.
 Apply writes checked targets once and rechecks the selected character and
 instruction mapping before each write. If Windows reports a partial read
@@ -37,7 +46,7 @@ build, process, session state, last Apply error, per-stat readings and targets,
 and up to 40 recent log lines. The log tail refreshes while Advanced is open.
 Open the in-game **Character** panel and click **Read Stats panel** in Advanced
 for a Windows OCR snapshot of the visible readings. The OCR snapshot is included
-in **Copy details**. Apply uses its existing verified mappings.
+in **Copy details**. Apply uses verified memory mappings only.
 
 The background log includes search, process detection, update, and stat events at
 `%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-rust.log`.
