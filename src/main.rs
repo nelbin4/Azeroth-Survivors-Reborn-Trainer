@@ -4,6 +4,7 @@ mod app;
 mod diagnostic_log;
 mod hunt;
 mod process;
+mod screen_stats;
 mod session_role;
 mod settings;
 mod stat_fields;

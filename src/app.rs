@@ -102,6 +102,8 @@ pub struct TrainerApp {
     status: String,
     error: Option<String>,
     show_details: bool,
+    screen_stats: Option<String>,
+    screen_stats_result: Option<Receiver<io::Result<String>>>,
     log_tail: String,
     next_log_read: Instant,
     selected: usize,
@@ -239,6 +241,8 @@ impl TrainerApp {
             snapshot: None,
             status: "Start Reborn to find a character.".into(),
             show_details: false,
+            screen_stats: None,
+            screen_stats_result: None,
             log_tail: String::new(),
             next_log_read: Instant::now(),
             selected: 0,
@@ -266,6 +270,8 @@ impl TrainerApp {
                 event("hunt.cancelled", format_args!("reason=connection_changed"));
             }
             self.session = session;
+            self.screen_stats = None;
+            self.screen_stats_result = None;
             self.cached_role = None;
             self.last_verified_role = None;
             self.last_apply_error = None;
@@ -284,6 +290,9 @@ impl TrainerApp {
     }
 
     fn poll(&mut self, context: &egui::Context) {
+        if let Some(result) = finished(&mut self.screen_stats_result) {
+            self.screen_stats = Some(result.unwrap_or_else(|error| error.to_string()));
+        }
         if let Some(result) = finished(&mut self.process_result) {
             match result {
                 Ok(games) => {
@@ -1111,6 +1120,9 @@ impl TrainerApp {
                 directory.join("reborn-rust.log").display()
             );
         }
+        if let Some(stats) = &self.screen_stats {
+            let _ = writeln!(report, "\nSCREEN STATS (OCR)\n{stats}");
+        }
         let _ = writeln!(report, "\nRECENT LOG (up to 40 lines)\n{}", self.log_tail);
         report
     }
@@ -1196,20 +1208,38 @@ impl eframe::App for TrainerApp {
                     .unwrap_or_else(|error| format!("Log unavailable: {error}"));
             }
             let text = self.diagnostic_text();
+            let mut capture = false;
             egui::Window::new("Detection details")
                 .open(&mut self.show_details)
                 .default_width(680.0)
                 .show(context, |ui| {
-                    if ui.button("Copy details").clicked() {
-                        event("diagnostics.copied", format_args!(""));
-                        context.copy_text(text.clone());
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Copy details").clicked() {
+                            event("diagnostics.copied", format_args!(""));
+                            context.copy_text(text.clone());
+                        }
+                        let busy = self.screen_stats_result.is_some();
+                        let label = if busy {
+                            "Reading Stats panel…"
+                        } else {
+                            "Read Stats panel"
+                        };
+                        capture = ui
+                            .add_enabled(self.session.is_some() && !busy, Button::new(label))
+                            .on_hover_text("Open the Character panel in Reborn first.")
+                            .clicked();
+                    });
                     egui::ScrollArea::vertical()
                         .max_height(520.0)
                         .show(ui, |ui| {
                             ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
                         });
                 });
+            if capture && let Some(session) = &self.session {
+                let pid = session.pid;
+                self.screen_stats_result =
+                    Some(task(context, move || crate::screen_stats::read(pid)));
+            }
         }
     }
 }

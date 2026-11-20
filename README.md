@@ -35,6 +35,10 @@ Current health follows verified maximum health. Echo requires the active Echo ef
 Open **Advanced → Detection details** and click **Copy details** to copy the game
 build, process, session state, last Apply error, per-stat readings and targets,
 and up to 40 recent log lines. The log tail refreshes while Advanced is open.
+Open the in-game **Character** panel and click **Read Stats panel** in Advanced
+for a Windows OCR snapshot of the visible readings. The OCR snapshot is included
+in **Copy details**. Apply uses its existing verified mappings.
+
 The background log includes search, session check, update, and stat events at
 `%LOCALAPPDATA%\Azeroth Survivor Reborn Trainer\reborn-rust.log`.
 The active log is capped at 10 KB (10,000 bytes) and rotates to `reborn-rust.previous.log`. If settings are malformed,
