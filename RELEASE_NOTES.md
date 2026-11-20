@@ -1,6 +1,7 @@
 Azeroth Survivor Reborn Trainer v1.1.0
 
 - With `--mode 2` (OCR), Find keeps scanning the screen until the Stats panel is found, pausing about one second between scans. Stop ends the scans. Memory discovery runs once after the panel is found.
+- With the default Memory Read mode, if memory discovery fails its six attempts, Find switches to OCR, waits for the Stats panel, then tries memory discovery once more.
 
 Azeroth Survivor Reborn Trainer v1.0.9
 

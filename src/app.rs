@@ -73,6 +73,94 @@ const MEMORY_RETRIES: usize = 5;
 // Pause between OCR scans while the Stats panel is not on screen: 10 steps of 100 ms.
 const OCR_RETRY_DELAY_STEPS: usize = 10;
 
+fn check_stop(stop: &AtomicBool) -> io::Result<()> {
+    if stop.load(Ordering::Acquire) {
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Find cancelled.",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+// Waits in 100 ms steps so that Stop is honoured quickly.
+fn pause(stop: &AtomicBool, steps: usize) -> io::Result<()> {
+    for _ in 0..steps {
+        check_stop(stop)?;
+        thread::sleep(Duration::from_millis(100));
+    }
+    Ok(())
+}
+
+// OCR only locates the Stats panel, so it keeps scanning until the panel is on screen.
+fn wait_for_stats_panel(
+    session: &Session,
+    stop: &AtomicBool,
+    outcome: &mut FindOutcome,
+) -> io::Result<()> {
+    let mut scan = 0;
+    loop {
+        check_stop(stop)?;
+        scan += 1;
+        match crate::screen_stats::read(session.pid) {
+            Ok(reading) => {
+                event(
+                    "hunt.ocr_completed",
+                    format_args!("game_pid={} scan={scan}", session.pid),
+                );
+                outcome.screen_stats = Some(reading);
+                outcome.ocr_error = None;
+                return Ok(());
+            }
+            Err(error) => {
+                event(
+                    "hunt.ocr_failed",
+                    format_args!("game_pid={} scan={scan} error={error}", session.pid),
+                );
+                outcome.ocr_error = Some(error.to_string());
+                pause(stop, OCR_RETRY_DELAY_STEPS)?;
+            }
+        }
+    }
+}
+
+// Returns true when a verified stat mapping was found.
+fn memory_discovery(
+    session: &Session,
+    stop: &AtomicBool,
+    attempts: usize,
+    outcome: &mut FindOutcome,
+) -> io::Result<bool> {
+    for attempt in 1..=attempts {
+        check_stop(stop)?;
+        outcome.attempts += 1;
+        event(
+            "hunt.attempt",
+            format_args!("game_pid={} attempt={attempt} mode=Memory", session.pid),
+        );
+        match hunt::find(session, stop) {
+            Ok(snapshot) if snapshot.stats.is_some() => {
+                outcome.snapshot = Some(snapshot);
+                return Ok(true);
+            }
+            Ok(snapshot) => {
+                outcome.last_error = Some(format!(
+                    "Build {} did not produce a verified stat mapping.",
+                    snapshot.build
+                ));
+                outcome.snapshot = Some(snapshot);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+            Err(error) => outcome.last_error = Some(error.to_string()),
+        }
+        if attempt < attempts {
+            pause(stop, 5)?;
+        }
+    }
+    Ok(false)
+}
+
 fn find_with_fallback(
     session: &Session,
     stop: &AtomicBool,
@@ -86,114 +174,20 @@ fn find_with_fallback(
         last_error: None,
     };
     if mode == DetectionMode::Ocr {
-        // OCR only locates the Stats panel, so it keeps scanning until the panel is on screen.
-        let mut scan = 0;
-        loop {
-            if stop.load(Ordering::Acquire) {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "Find cancelled.",
-                ));
-            }
-            scan += 1;
-            match crate::screen_stats::read(session.pid) {
-                Ok(reading) => {
-                    event(
-                        "hunt.ocr_completed",
-                        format_args!("game_pid={} mode=primary scan={scan}", session.pid),
-                    );
-                    outcome.screen_stats = Some(reading);
-                    outcome.ocr_error = None;
-                    break;
-                }
-                Err(error) => {
-                    event(
-                        "hunt.ocr_failed",
-                        format_args!(
-                            "game_pid={} mode=primary scan={scan} error={error}",
-                            session.pid
-                        ),
-                    );
-                    outcome.ocr_error = Some(error.to_string());
-                    for _ in 0..OCR_RETRY_DELAY_STEPS {
-                        if stop.load(Ordering::Acquire) {
-                            return Err(io::Error::new(
-                                io::ErrorKind::Interrupted,
-                                "Find cancelled.",
-                            ));
-                        }
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                }
-            }
-        }
+        wait_for_stats_panel(session, stop, &mut outcome)?;
+        memory_discovery(session, stop, 1, &mut outcome)?;
+        return Ok(outcome);
     }
-    let attempts = if mode == DetectionMode::MemoryRead {
-        MEMORY_RETRIES + 1
-    } else {
-        1
-    };
-    for attempt in 1..=attempts {
-        if stop.load(Ordering::Acquire) {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "Find cancelled.",
-            ));
-        }
-        outcome.attempts = attempt;
-        event(
-            "hunt.attempt",
-            format_args!("game_pid={} attempt={} mode={mode:?}", session.pid, attempt),
-        );
-        match hunt::find(session, stop) {
-            Ok(snapshot) if snapshot.stats.is_some() => {
-                outcome.snapshot = Some(snapshot);
-                return Ok(outcome);
-            }
-            Ok(snapshot) => {
-                outcome.last_error = Some(format!(
-                    "Build {} did not produce a verified stat mapping.",
-                    snapshot.build
-                ));
-                outcome.snapshot = Some(snapshot);
-            }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
-            Err(error) => outcome.last_error = Some(error.to_string()),
-        }
-        if attempt < attempts {
-            for _ in 0..5 {
-                if stop.load(Ordering::Acquire) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Interrupted,
-                        "Find cancelled.",
-                    ));
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-        }
+    if memory_discovery(session, stop, MEMORY_RETRIES + 1, &mut outcome)? {
+        return Ok(outcome);
     }
-    if mode == DetectionMode::MemoryRead {
-        event(
-            "hunt.ocr_fallback_started",
-            format_args!("game_pid={} attempts={}", session.pid, outcome.attempts),
-        );
-        match crate::screen_stats::read(session.pid) {
-            Ok(reading) => {
-                event(
-                    "hunt.ocr_completed",
-                    format_args!("game_pid={} mode=fallback", session.pid),
-                );
-                outcome.screen_stats = Some(reading);
-            }
-            Err(error) => {
-                event(
-                    "hunt.ocr_failed",
-                    format_args!("game_pid={} mode=fallback error={error}", session.pid),
-                );
-                outcome.ocr_error = Some(error.to_string());
-            }
-        }
-    }
+    // Memory Read failed its attempts: switch to OCR for the Stats panel, then try memory once more.
+    event(
+        "hunt.ocr_fallback_started",
+        format_args!("game_pid={} attempts={}", session.pid, outcome.attempts),
+    );
+    wait_for_stats_panel(session, stop, &mut outcome)?;
+    memory_discovery(session, stop, 1, &mut outcome)?;
     Ok(outcome)
 }
 
