@@ -50,7 +50,9 @@ pub fn read(pid: u32) -> io::Result<String> {
     let (width, height) = image.dimensions();
     let limit = OcrEngine::MaxImageDimension().map_err(io::Error::other)?;
     if width.max(height) > limit {
-        return Err(io::Error::other("Game window is too large for Windows OCR."));
+        return Err(io::Error::other(
+            "Game window is too large for Windows OCR.",
+        ));
     }
     // Scan the whole game window; the Stats column is located from its heading.
     let scale = (limit / width.max(height)).clamp(1, 3);
@@ -194,9 +196,7 @@ fn stats_column(result: &OcrResult, width: f32) -> windows::core::Result<Option<
 fn stat_rows(result: &OcrResult, columns: Option<(f32, f32)>) -> windows::core::Result<String> {
     let mut words: Vec<Word> = collect_words(result)?
         .into_iter()
-        .filter(|word| {
-            columns.is_none_or(|(left, right)| (left..=right).contains(&word.center_x))
-        })
+        .filter(|word| columns.is_none_or(|(left, right)| (left..=right).contains(&word.center_x)))
         .collect();
     words.sort_by(|a, b| a.center.total_cmp(&b.center));
     let mut text = String::new();

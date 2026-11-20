@@ -101,7 +101,11 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         Box::new(move |context| {
-            Ok(Box::new(app::TrainerApp::new(context, update_ready, options)))
+            Ok(Box::new(app::TrainerApp::new(
+                context,
+                update_ready,
+                options,
+            )))
         }),
     );
     match &result {
