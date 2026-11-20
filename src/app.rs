@@ -187,8 +187,40 @@ impl Drop for Apply {
     }
 }
 
+/// Command-line options. They apply to this run only and are not saved.
+#[derive(Default)]
+pub struct LaunchOptions {
+    pub mode: Option<DetectionMode>,
+    pub find: bool,
+}
+
+/// Reads `--mode 1` (Memory Read) or `--mode 2` (OCR) and `--find`. Other arguments are ignored here.
+pub fn parse_launch_options(
+    arguments: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<LaunchOptions, String> {
+    let mut options = LaunchOptions::default();
+    let mut arguments = arguments;
+    while let Some(argument) = arguments.next() {
+        match argument.to_str() {
+            Some("--find") => options.find = true,
+            Some("--mode") => {
+                let value = arguments.next();
+                options.mode = match value.as_deref().and_then(|value| value.to_str()) {
+                    Some("1") => Some(DetectionMode::MemoryRead),
+                    Some("2") => Some(DetectionMode::Ocr),
+                    _ => return Err("--mode takes 1 (Memory Read) or 2 (OCR).".into()),
+                };
+            }
+            _ => {}
+        }
+    }
+    Ok(options)
+}
+
 pub struct TrainerApp {
     settings: Settings,
+    mode_override: Option<DetectionMode>,
+    find_on_start: bool,
     session: Option<Session>,
     process_result: Option<Receiver<io::Result<Games>>>,
     launch_result: Option<Receiver<io::Result<Session>>>,
@@ -272,7 +304,11 @@ fn finished<T>(receiver: &mut Option<Receiver<io::Result<T>>>) -> Option<io::Res
 }
 
 impl TrainerApp {
-    pub fn new(context: &eframe::CreationContext<'_>, update_ready: Option<PathBuf>) -> Self {
+    pub fn new(
+        context: &eframe::CreationContext<'_>,
+        update_ready: Option<PathBuf>,
+        options: LaunchOptions,
+    ) -> Self {
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = FRAME;
         visuals.window_fill = FRAME;
@@ -326,6 +362,8 @@ impl TrainerApp {
         let targets = std::array::from_fn(|index| STATS[index].saved_target(prefs));
         Self {
             settings,
+            mode_override: options.mode,
+            find_on_start: options.find,
             error,
             session: None,
             process_result: None,
@@ -648,7 +686,9 @@ impl TrainerApp {
             let stop = Arc::new(AtomicBool::new(false));
             let worker_session = session.clone();
             let worker_stop = stop.clone();
-            let mode = self.settings.detection_mode();
+            let mode = self
+                .mode_override
+                .unwrap_or_else(|| self.settings.detection_mode());
             let result = task(context, move || {
                 find_with_fallback(&worker_session, &worker_stop, mode)
             });
@@ -1266,6 +1306,10 @@ impl TrainerApp {
 impl eframe::App for TrainerApp {
     fn update(&mut self, context: &egui::Context, _: &mut eframe::Frame) {
         self.poll(context);
+        if self.find_on_start && self.session.is_some() && self.scan.is_none() {
+            self.find_on_start = false;
+            self.start_find(context);
+        }
         let frame = egui::Frame::new()
             .fill(FRAME)
             .inner_margin(egui::Margin::same(16));
