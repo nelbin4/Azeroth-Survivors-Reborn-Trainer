@@ -129,21 +129,6 @@ fn panel_text(rows: &str) -> Option<String> {
     .then(|| readings.join("\n"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ignores_gear_bonuses_and_requires_the_stats_panel() {
-        let text = "Equipment\nDamage +21%\nStats\nRUN\nGold 2\nOFFENSE\nDamage +27%\nDEFENSE\nHealth 72 / 353\nUTILITY\nLuck +35%";
-        let report = panel_text(text).unwrap();
-        assert!(report.contains("Damage +27%"));
-        assert!(!report.contains("Damage +21%"));
-        assert!(report.contains("Health 72 / 353"));
-        assert!(panel_text("Equipment\nDamage +21%").is_none());
-    }
-}
-
 fn recognize(
     engine: &OcrEngine,
     pixels: &[u8],
@@ -292,5 +277,20 @@ fn capture(pid: u32) -> io::Result<Frame> {
         DeleteObject(bitmap);
         DeleteDC(dc);
         frame
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ignores_gear_bonuses_and_requires_the_stats_panel() {
+        let text = "Equipment\nDamage +21%\nStats\nRUN\nGold 2\nOFFENSE\nDamage +27%\nDEFENSE\nHealth 72 / 353\nUTILITY\nLuck +35%";
+        let report = panel_text(text).unwrap();
+        assert!(report.contains("Damage +27%"));
+        assert!(!report.contains("Damage +21%"));
+        assert!(report.contains("Health 72 / 353"));
+        assert!(panel_text("Equipment\nDamage +21%").is_none());
     }
 }
