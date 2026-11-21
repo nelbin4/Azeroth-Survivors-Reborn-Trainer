@@ -278,7 +278,7 @@ fn verified(reader: &Reader, base: usize, guards: &[Guard]) -> bool {
 
 pub fn groups(reader: &Reader, base: usize, profile: Profile) -> Groups {
     if let Profile::Block { .. } = profile {
-        // The stat block itself was located by code analysis; its position is the proof.
+        // The stat block was located by code analysis. The combat fields are assumed to keep the verified order.
         return Groups {
             combat: true,
             resource: false,

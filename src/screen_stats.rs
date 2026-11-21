@@ -187,10 +187,21 @@ fn collect_words(result: &OcrResult) -> windows::core::Result<Vec<Word>> {
 // The Stats heading sits in the middle of its column; the column spans about 8.5% of the
 // game width to the left of the heading and 7.5% to the right.
 fn stats_column(result: &OcrResult, width: f32) -> windows::core::Result<Option<(f32, f32)>> {
-    Ok(collect_words(result)?
-        .iter()
-        .find(|word| word.text.eq_ignore_ascii_case("Stats"))
-        .map(|word| (word.center_x - 0.085 * width, word.center_x + 0.075 * width)))
+    let words = collect_words(result)?;
+    for heading in words.iter().filter(|word| word.text.eq_ignore_ascii_case("Stats")) {
+        let columns = (heading.center_x - 0.085 * width, heading.center_x + 0.075 * width);
+        // Another "Stats" text elsewhere on screen has no OFFENSE and DEFENSE sections under it.
+        let has_section = |name: &str| {
+            words.iter().any(|word| {
+                let inside = (columns.0..=columns.1).contains(&word.center_x);
+                inside && word.text.eq_ignore_ascii_case(name)
+            })
+        };
+        if has_section("OFFENSE") && has_section("DEFENSE") {
+            return Ok(Some(columns));
+        }
+    }
+    Ok(None)
 }
 
 fn stat_rows(result: &OcrResult, columns: Option<(f32, f32)>) -> windows::core::Result<String> {

@@ -56,6 +56,8 @@ pub fn icon() -> io::Result<egui::IconData> {
 
 struct Search {
     stop: Arc<AtomicBool>,
+    // True while OCR is scanning for the Stats panel, so the window can ask for the Character panel.
+    waiting_for_panel: Arc<AtomicBool>,
     started: Instant,
     session: Session,
     result: Receiver<io::Result<FindOutcome>>,
@@ -93,8 +95,21 @@ fn pause(stop: &AtomicBool, steps: usize) -> io::Result<()> {
     Ok(())
 }
 
-// OCR only locates the Stats panel, so it keeps scanning until the panel is on screen.
+// Sets `waiting` for the whole scan, including the error paths.
 fn wait_for_stats_panel(
+    session: &Session,
+    stop: &AtomicBool,
+    waiting: &AtomicBool,
+    outcome: &mut FindOutcome,
+) -> io::Result<()> {
+    waiting.store(true, Ordering::Release);
+    let result = scan_for_panel(session, stop, outcome);
+    waiting.store(false, Ordering::Release);
+    result
+}
+
+// OCR only locates the Stats panel, so it keeps scanning until the panel is on screen.
+fn scan_for_panel(
     session: &Session,
     stop: &AtomicBool,
     outcome: &mut FindOutcome,
@@ -164,6 +179,7 @@ fn memory_discovery(
 fn find_with_fallback(
     session: &Session,
     stop: &AtomicBool,
+    waiting: &AtomicBool,
     mode: DetectionMode,
 ) -> io::Result<FindOutcome> {
     let mut outcome = FindOutcome {
@@ -174,7 +190,7 @@ fn find_with_fallback(
         last_error: None,
     };
     if mode == DetectionMode::Ocr {
-        wait_for_stats_panel(session, stop, &mut outcome)?;
+        wait_for_stats_panel(session, stop, waiting, &mut outcome)?;
         memory_discovery(session, stop, 1, &mut outcome)?;
         return Ok(outcome);
     }
@@ -186,7 +202,7 @@ fn find_with_fallback(
         "hunt.ocr_fallback_started",
         format_args!("game_pid={} attempts={}", session.pid, outcome.attempts),
     );
-    wait_for_stats_panel(session, stop, &mut outcome)?;
+    wait_for_stats_panel(session, stop, waiting, &mut outcome)?;
     memory_discovery(session, stop, 1, &mut outcome)?;
     Ok(outcome)
 }
@@ -707,14 +723,17 @@ impl TrainerApp {
             let stop = Arc::new(AtomicBool::new(false));
             let worker_session = session.clone();
             let worker_stop = stop.clone();
+            let waiting = Arc::new(AtomicBool::new(false));
+            let worker_waiting = waiting.clone();
             let mode = self
                 .mode_override
                 .unwrap_or_else(|| self.settings.detection_mode());
             let result = task(context, move || {
-                find_with_fallback(&worker_session, &worker_stop, mode)
+                find_with_fallback(&worker_session, &worker_stop, &worker_waiting, mode)
             });
             self.scan = Some(Search {
                 stop,
+                waiting_for_panel: waiting,
                 started: Instant::now(),
                 session,
                 result,
@@ -1372,7 +1391,9 @@ impl eframe::App for TrainerApp {
                 if let Some(error) = &self.error {
                     ui.colored_label(Color32::LIGHT_RED, error);
                 }
-                if self.scan.is_some() {
+                if self.scan.as_ref().is_some_and(|scan| {
+                    scan.waiting_for_panel.load(Ordering::Acquire)
+                }) {
                     ui.label(
                         RichText::new(
                             "Open your Character panel (press C) and leave it open until the trainer finds the values.",

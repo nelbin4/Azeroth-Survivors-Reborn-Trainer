@@ -12,24 +12,31 @@ written in Rust. [Download the latest standalone EXE](https://github.com/nelbin4
 
 ### Game updates and stat discovery
 
-**Find** looks for your character and checks the discovered layout against
-supported stat layouts. A changed build fingerprint can use a compatible layout when the
-live instruction checks for the affected stat group pass. The combat and resource
-groups are checked independently. If a game update changes the layout or removes
-the matching instructions, the affected stats remain unavailable. Build
-`c639287405d0` has resource and
-combat mappings. Cooldown reduction and Echo are unavailable on this build.
+**Find** looks for your character in memory and finds the stat block by analysing
+the game executable. The combat stats (Damage, Crit, Crit Damage, Speed, Armor,
+Regen, Pickup, Gold Bonus, Area, Targets, Luck) are placed inside that block, so a
+new game build does not need hand-entered offsets for them. Build `c639287405d0`
+has resource and combat mappings. Cooldown reduction and Echo are unavailable on
+this build. Health, Run Gold and Rerolls need a verified mapping for each build.
 Enable the targets you want before clicking **Find**, or select one and click
 **Apply**. Targets outside the verified mapping are skipped.
 
 In **Advanced → Detection details**, **Detection Mode** defaults to **Memory Read**.
-Find makes one initial memory discovery attempt and retries up to five times if
-it does not verify a stat mapping. It then captures the visible Stats panel using
-Windows OCR. Open the in-game Character panel with **C** for that fallback.
-Selecting **OCR** captures the panel first, then performs memory discovery. OCR
-readings are diagnostic references; they do not establish writable memory
-addresses, so the trainer only applies stats backed by a verified memory mapping.
-The selected mode is saved in local settings.
+Find makes six memory discovery attempts. If none verifies a stat mapping, Find
+switches to OCR: it scans the game window every second or so until the Stats panel
+appears, then tries memory discovery once more. Open the in-game Character panel
+with **C** when the trainer asks. OCR only locates the Stats panel; it does not
+set or verify values.
+
+Selecting **OCR** keeps scanning the screen until the Stats panel is found, then
+runs memory discovery once. The selected mode is saved in local settings.
+
+Command-line options apply to one run and are not saved:
+
+- `--mode 1` uses Memory Read, `--mode 2` uses OCR.
+- `--find` starts Find once the game is connected.
+
+Example: `Azeroth.Survivor.Reborn.Trainer.exe --mode 2 --find`
 
 **Find** discovers the game process, character, and verified stat mapping.
 Apply writes checked targets once and rechecks the selected character and
