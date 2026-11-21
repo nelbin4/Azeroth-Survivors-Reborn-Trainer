@@ -1,3 +1,9 @@
+Azeroth Survivor Reborn Trainer v1.1.1
+
+- The Stats panel is recognised only when OFFENSE and DEFENSE sections sit under its heading, so other "Stats" text on screen is ignored.
+- The Character panel prompt appears only while OCR is waiting for the Stats panel.
+- README updated for Memory Read fallback to OCR and the `--mode` and `--find` options.
+
 Azeroth Survivor Reborn Trainer v1.1.0
 
 - With `--mode 2` (OCR), Find keeps scanning the screen until the Stats panel is found, pausing about one second between scans. Stop ends the scans. Memory discovery runs once after the panel is found.
