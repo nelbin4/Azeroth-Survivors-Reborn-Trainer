@@ -21,15 +21,16 @@ this build. Health, Run Gold and Rerolls need a verified mapping for each build.
 Enable the targets you want before clicking **Find**, or select one and click
 **Apply**. Targets outside the verified mapping are skipped.
 
-In **Advanced → Detection details**, **Detection Mode** defaults to **Memory Read**.
-Find makes six memory discovery attempts. If none verifies a stat mapping, Find
-switches to OCR: it scans the game window every second or so until the Stats panel
-appears, then tries memory discovery once more. Open the in-game Character panel
-with **C** when the trainer asks. OCR only locates the Stats panel; it does not
-set or verify values.
+In **Advanced → Detection details**, **Detection Mode** defaults to **OCR**.
+Find keeps scanning the game window until the Stats panel appears, pausing two
+seconds between scans. Open the in-game Character panel with **C** when the
+trainer asks. OCR only locates the Stats panel; memory reads then find the
+character and set the values.
 
-Selecting **OCR** keeps scanning the screen until the Stats panel is found, then
-runs memory discovery once. The selected mode is saved in local settings.
+**Memory Read** is still available in Detection Mode. With it, Find makes six
+memory discovery attempts. If none verifies a stat mapping, Find switches to OCR
+for the Stats panel, then tries memory discovery once more. The selected mode is
+saved in local settings.
 
 Command-line options apply to one run and are not saved:
 

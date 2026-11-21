@@ -7,8 +7,8 @@ use serde_json::{Map, Value};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DetectionMode {
-    Ocr,
     #[default]
+    Ocr,
     MemoryRead,
 }
 
@@ -90,8 +90,8 @@ impl Settings {
 
     pub fn detection_mode(&self) -> DetectionMode {
         match self.fields.get("detection_mode").and_then(Value::as_str) {
-            Some("ocr") => DetectionMode::Ocr,
-            _ => DetectionMode::MemoryRead,
+            Some("memory_read") => DetectionMode::MemoryRead,
+            _ => DetectionMode::Ocr,
         }
     }
 
