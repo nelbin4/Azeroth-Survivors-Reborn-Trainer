@@ -1,3 +1,10 @@
+Azeroth Survivor Reborn Trainer v1.1.2
+
+- OCR is the default Detection Mode. Memory Read is still available in Advanced.
+- OCR scans are faster: the no-op resize is skipped, and each scan logs its capture and recognize time (`ocr.scan` in the log).
+- OCR waits 2 seconds between scans while the Stats panel is not on screen.
+- The Character panel prompt pulses between gold and bright yellow so it is easy to notice.
+
 Azeroth Survivor Reborn Trainer v1.1.1
 
 - The Stats panel is recognised only when OFFENSE and DEFENSE sections sit under its heading, so other "Stats" text on screen is ignored.
