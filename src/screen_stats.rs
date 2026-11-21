@@ -1,6 +1,8 @@
 // Window capture and OCR calls adapted from the MIT-licensed Azeroth Survivors Trainer.
 use image::{RgbaImage, imageops::FilterType};
-use std::{io, ptr::null_mut, slice};
+use std::{io, ptr::null_mut, slice, time::Instant};
+
+use crate::diagnostic_log::event;
 use windows::{
     Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap},
     Media::Ocr::{OcrEngine, OcrResult},
@@ -42,7 +44,9 @@ impl Drop for Apartment {
 }
 
 pub fn read(pid: u32) -> io::Result<String> {
+    let started = Instant::now();
     let frame = capture(pid)?;
+    let captured = started.elapsed();
     let _apartment = Apartment::enter().map_err(io::Error::other)?;
     let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(io::Error::other)?;
     let image = RgbaImage::from_raw(frame.width as u32, frame.height as u32, frame.pixels)
@@ -55,9 +59,14 @@ pub fn read(pid: u32) -> io::Result<String> {
         ));
     }
     // Scan the whole game window; the Stats column is located from its heading.
+    // Resize only when enlarging: at scale 1 the resize would only cost time.
     let scale = (limit / width.max(height)).clamp(1, 3);
-    let scanned =
-        image::imageops::resize(&image, width * scale, height * scale, FilterType::Lanczos3);
+    let scanned = if scale > 1 {
+        image::imageops::resize(&image, width * scale, height * scale, FilterType::Lanczos3)
+    } else {
+        image
+    };
+    let recognizing = Instant::now();
     let result = recognize(
         &engine,
         scanned.as_raw(),
@@ -65,6 +74,14 @@ pub fn read(pid: u32) -> io::Result<String> {
         scanned.height() as usize,
     )
     .map_err(io::Error::other)?;
+    event(
+        "ocr.scan",
+        format_args!(
+            "pid={pid} capture_ms={} recognize_ms={} scale={scale}",
+            captured.as_millis(),
+            recognizing.elapsed().as_millis()
+        ),
+    );
     let columns = stats_column(&result, scanned.width() as f32)
         .map_err(io::Error::other)?
         .ok_or_else(|| {

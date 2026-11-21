@@ -72,8 +72,8 @@ struct FindOutcome {
 }
 
 const MEMORY_RETRIES: usize = 5;
-// Pause between OCR scans while the Stats panel is not on screen: 10 steps of 100 ms.
-const OCR_RETRY_DELAY_STEPS: usize = 10;
+// Pause between OCR scans while the Stats panel is not on screen: 20 steps of 100 ms (2 seconds).
+const OCR_RETRY_DELAY_STEPS: usize = 20;
 
 fn check_stop(stop: &AtomicBool) -> io::Result<()> {
     if stop.load(Ordering::Acquire) {
