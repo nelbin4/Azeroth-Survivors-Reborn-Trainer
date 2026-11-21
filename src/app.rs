@@ -1394,12 +1394,23 @@ impl eframe::App for TrainerApp {
                 if self.scan.as_ref().is_some_and(|scan| {
                     scan.waiting_for_panel.load(Ordering::Acquire)
                 }) {
+                    // A 1.5 second pulse between gold and bright yellow makes the prompt hard to miss.
+                    let pulse = ((context.input(|input| input.time) * std::f64::consts::TAU / 1.5)
+                        .sin() as f32
+                        + 1.0)
+                        / 2.0;
+                    let glow = Color32::from_rgb(
+                        (227.0 + 28.0 * pulse) as u8,
+                        (190.0 + 60.0 * pulse) as u8,
+                        (105.0 + 120.0 * pulse) as u8,
+                    );
+                    context.request_repaint_after(Duration::from_millis(50));
                     ui.label(
                         RichText::new(
                             "Open your Character panel (press C) and leave it open until the trainer finds the values.",
                         )
                         .size(22.0)
-                        .color(GOLD)
+                        .color(glow)
                         .strong(),
                     );
                 }
