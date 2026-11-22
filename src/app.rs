@@ -17,7 +17,7 @@ use crate::{
     diagnostic_log::event,
     hunt::{self, Snapshot},
     process::{self, Games, Session},
-    settings::{DetectionMode, Settings},
+    settings::Settings,
     stats_ui::{STATS, Stat},
     update,
 };
@@ -176,11 +176,11 @@ fn memory_discovery(
     Ok(false)
 }
 
+// OCR finds the Stats panel on screen. Memory then reads the character and sets the values.
 fn find_with_fallback(
     session: &Session,
     stop: &AtomicBool,
     waiting: &AtomicBool,
-    mode: DetectionMode,
 ) -> io::Result<FindOutcome> {
     let mut outcome = FindOutcome {
         snapshot: None,
@@ -189,21 +189,8 @@ fn find_with_fallback(
         ocr_error: None,
         last_error: None,
     };
-    if mode == DetectionMode::Ocr {
-        wait_for_stats_panel(session, stop, waiting, &mut outcome)?;
-        memory_discovery(session, stop, 1, &mut outcome)?;
-        return Ok(outcome);
-    }
-    if memory_discovery(session, stop, MEMORY_RETRIES + 1, &mut outcome)? {
-        return Ok(outcome);
-    }
-    // Memory Read failed its attempts: switch to OCR for the Stats panel, then try memory once more.
-    event(
-        "hunt.ocr_fallback_started",
-        format_args!("game_pid={} attempts={}", session.pid, outcome.attempts),
-    );
     wait_for_stats_panel(session, stop, waiting, &mut outcome)?;
-    memory_discovery(session, stop, 1, &mut outcome)?;
+    memory_discovery(session, stop, MEMORY_RETRIES + 1, &mut outcome)?;
     Ok(outcome)
 }
 
@@ -224,40 +211,8 @@ impl Drop for Apply {
     }
 }
 
-/// Command-line options. They apply to this run only and are not saved.
-#[derive(Default)]
-pub struct LaunchOptions {
-    pub mode: Option<DetectionMode>,
-    pub find: bool,
-}
-
-/// Reads `--mode 1` (Memory Read) or `--mode 2` (OCR) and `--find`. Other arguments are ignored here.
-pub fn parse_launch_options(
-    arguments: impl Iterator<Item = std::ffi::OsString>,
-) -> Result<LaunchOptions, String> {
-    let mut options = LaunchOptions::default();
-    let mut arguments = arguments;
-    while let Some(argument) = arguments.next() {
-        match argument.to_str() {
-            Some("--find") => options.find = true,
-            Some("--mode") => {
-                let value = arguments.next();
-                options.mode = match value.as_deref().and_then(|value| value.to_str()) {
-                    Some("1") => Some(DetectionMode::MemoryRead),
-                    Some("2") => Some(DetectionMode::Ocr),
-                    _ => return Err("--mode takes 1 (Memory Read) or 2 (OCR).".into()),
-                };
-            }
-            _ => {}
-        }
-    }
-    Ok(options)
-}
-
 pub struct TrainerApp {
     settings: Settings,
-    mode_override: Option<DetectionMode>,
-    find_on_start: bool,
     session: Option<Session>,
     process_result: Option<Receiver<io::Result<Games>>>,
     launch_result: Option<Receiver<io::Result<Session>>>,
@@ -344,7 +299,6 @@ impl TrainerApp {
     pub fn new(
         context: &eframe::CreationContext<'_>,
         update_ready: Option<PathBuf>,
-        options: LaunchOptions,
     ) -> Self {
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = FRAME;
@@ -399,8 +353,6 @@ impl TrainerApp {
         let targets = std::array::from_fn(|index| STATS[index].saved_target(prefs));
         Self {
             settings,
-            mode_override: options.mode,
-            find_on_start: options.find,
             error,
             session: None,
             process_result: None,
@@ -725,11 +677,8 @@ impl TrainerApp {
             let worker_stop = stop.clone();
             let waiting = Arc::new(AtomicBool::new(false));
             let worker_waiting = waiting.clone();
-            let mode = self
-                .mode_override
-                .unwrap_or_else(|| self.settings.detection_mode());
             let result = task(context, move || {
-                find_with_fallback(&worker_session, &worker_stop, &worker_waiting, mode)
+                find_with_fallback(&worker_session, &worker_stop, &worker_waiting)
             });
             self.scan = Some(Search {
                 stop,
@@ -1252,14 +1201,7 @@ impl TrainerApp {
     fn diagnostic_text(&self) -> String {
         use std::fmt::Write as _;
 
-        let mut report = format!(
-            "Trainer {VERSION} / Windows x64\n\nSESSION\n{}\nDetection mode: {}\n",
-            self.status,
-            match self.settings.detection_mode() {
-                DetectionMode::MemoryRead => "Memory Read",
-                DetectionMode::Ocr => "OCR",
-            },
-        );
+        let mut report = format!("Trainer {VERSION} / Windows x64\n\nSESSION\n{}\n", self.status);
         if let Some(session) = &self.session {
             let _ = writeln!(
                 report,
@@ -1346,10 +1288,6 @@ impl TrainerApp {
 impl eframe::App for TrainerApp {
     fn update(&mut self, context: &egui::Context, _: &mut eframe::Frame) {
         self.poll(context);
-        if self.find_on_start && self.session.is_some() && self.scan.is_none() {
-            self.find_on_start = false;
-            self.start_find(context);
-        }
         let frame = egui::Frame::new()
             .fill(FRAME)
             .inner_margin(egui::Margin::same(16));
@@ -1455,36 +1393,9 @@ impl eframe::App for TrainerApp {
                 .open(&mut self.show_details)
                 .default_width(680.0)
                 .show(context, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Detection Mode");
-                        let mut mode = self.settings.detection_mode();
-                        egui::ComboBox::from_id_salt("detection-mode")
-                            .selected_text(match mode {
-                                DetectionMode::MemoryRead => "Memory Read",
-                                DetectionMode::Ocr => "OCR",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut mode,
-                                    DetectionMode::MemoryRead,
-                                    "Memory Read",
-                                );
-                                ui.selectable_value(&mut mode, DetectionMode::Ocr, "OCR");
-                            });
-                        if mode != self.settings.detection_mode()
-                            && let Err(error) = self.settings.set_detection_mode(mode)
-                        {
-                            self.error = Some(format!("Could not save detection mode: {error}"));
-                        }
-                    });
-                    ui.label(match self.settings.detection_mode() {
-                        DetectionMode::MemoryRead => {
-                            "Memory Read is default. Find retries five times, then reads the visible Stats panel with OCR."
-                        }
-                        DetectionMode::Ocr => {
-                            "OCR captures visible values first. Open the Character panel with C. OCR readings do not verify writable fields."
-                        }
-                    });
+                    ui.label(
+                        "Find locates the Stats panel with OCR, then reads and sets values in memory. Open the Character panel with C.",
+                    );
                     ui.horizontal(|ui| {
                         if ui.button("Copy details").clicked() {
                             event("diagnostics.copied", format_args!(""));

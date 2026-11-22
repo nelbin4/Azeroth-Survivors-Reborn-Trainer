@@ -83,11 +83,6 @@ fn main() -> eframe::Result {
         .filter(|value| value == "--update-ready")
         .and_then(|_| arguments.next())
         .map(std::path::PathBuf::from);
-    let parsed = app::parse_launch_options(std::env::args_os().skip(1));
-    let options = parsed.unwrap_or_else(|error| {
-        diagnostic_log::event("app.arguments", format_args!("{error}"));
-        app::LaunchOptions::default()
-    });
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size([980.0, 810.0])
         .with_resizable(false);
@@ -100,13 +95,7 @@ fn main() -> eframe::Result {
             viewport,
             ..Default::default()
         },
-        Box::new(move |context| {
-            Ok(Box::new(app::TrainerApp::new(
-                context,
-                update_ready,
-                options,
-            )))
-        }),
+        Box::new(move |context| Ok(Box::new(app::TrainerApp::new(context, update_ready)))),
     );
     match &result {
         Ok(()) => diagnostic_log::event("app.exit", format_args!("ok")),
