@@ -81,7 +81,6 @@ impl Settings {
         self.fields.get("stats")
     }
 
-
     pub fn set_game_path(&mut self, path: &Path) -> io::Result<()> {
         let path = path
             .to_str()

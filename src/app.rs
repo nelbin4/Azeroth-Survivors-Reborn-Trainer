@@ -296,10 +296,7 @@ fn finished<T>(receiver: &mut Option<Receiver<io::Result<T>>>) -> Option<io::Res
 }
 
 impl TrainerApp {
-    pub fn new(
-        context: &eframe::CreationContext<'_>,
-        update_ready: Option<PathBuf>,
-    ) -> Self {
+    pub fn new(context: &eframe::CreationContext<'_>, update_ready: Option<PathBuf>) -> Self {
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = FRAME;
         visuals.window_fill = FRAME;
@@ -1201,7 +1198,10 @@ impl TrainerApp {
     fn diagnostic_text(&self) -> String {
         use std::fmt::Write as _;
 
-        let mut report = format!("Trainer {VERSION} / Windows x64\n\nSESSION\n{}\n", self.status);
+        let mut report = format!(
+            "Trainer {VERSION} / Windows x64\n\nSESSION\n{}\n",
+            self.status
+        );
         if let Some(session) = &self.session {
             let _ = writeln!(
                 report,
