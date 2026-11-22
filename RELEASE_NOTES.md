@@ -1,3 +1,9 @@
+Azeroth Survivor Reborn Trainer v1.1.3
+
+- Memory Read mode and the `--mode` and `--find` command-line arguments are removed. Find always locates the Stats panel with OCR, then reads and sets values in memory.
+- Once the Stats panel is found, memory discovery makes up to six attempts.
+- Open the Character panel (press C) while Find is running. The trainer asks for it in its window.
+
 Azeroth Survivor Reborn Trainer v1.1.2
 
 - OCR is the default Detection Mode. Memory Read is still available in Advanced.
