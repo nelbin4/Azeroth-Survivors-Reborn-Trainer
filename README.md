@@ -7,7 +7,7 @@ written in Rust. [Download the latest standalone EXE](https://github.com/nelbin4
 
 1. Run **Azeroth.Survivor.Reborn.Trainer.exe**, then start Reborn.
 2. Choose the stats in the **Enabled** column and set their targets in the side panel.
-3. Start a run and click **Find**. The trainer applies each enabled target once after verifying the selected character and stat mapping.
+3. Start a run and click **Find**. While the trainer is finding stats, open the in-game Character panel with **C** and leave it open until the trainer finds the values. The trainer then applies each enabled target once after verifying the selected character and stat mapping.
 4. Use **Apply** to set the selected stat again. Use **Find** to apply all enabled targets again.
 
 ### Game updates and stat discovery
